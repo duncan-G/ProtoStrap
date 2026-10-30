@@ -156,6 +156,12 @@ picks a .NET SDK.
 
 ## Run mode
 
+With hosts, `aspire run` runs the edge's Envoy as `protostrap-edge`, serving each host's
+local hostname on port 20000 (`WithLocalEdge(port: ...)`), routed and authorized by the same
+`PublishAsProtoStrapService` settings and rendered by `protostrap edge render`, which must
+be on `PATH` ([The local edge](../docs/protostrap-aspire.md#the-local-edge)). Every resource
+gets `HOST_<NAME>` and `ORIGIN_<NAME>` for the local hostnames.
+
 In run mode, `AddProtoStrapQueue`, `AddProtoStrapBucket` and `AddProtoStrapFiles` add one
 LocalStack container, `protostrap-localstack`, which creates each queue and bucket, as
 `protostrap-<name>`, and the files bucket, `protostrap-files`, before any component that

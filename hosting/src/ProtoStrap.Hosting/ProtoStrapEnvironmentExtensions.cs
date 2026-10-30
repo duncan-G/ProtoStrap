@@ -69,7 +69,29 @@ public static class ProtoStrapEnvironmentExtensions
                 AddHostVariables(e.Model.Resources, environment);
                 return Task.CompletedTask;
             });
+            if (environment.LocalEdge is null)
+                LocalEdge.Add(builder.ApplicationBuilder, environment);
         }
+        return builder;
+    }
+
+    /// <summary>
+    /// WithLocalEdge sets the port the edge serves the hosts' local hostnames on under `aspire
+    /// run`, 20000 by default: browsers open http://&lt;local hostname&gt;:&lt;port&gt;. The edge
+    /// is the Envoy ProtoStrap runs in an account, rendered by `protostrap edge render`.
+    /// </summary>
+    public static IResourceBuilder<ProtoStrapEnvironmentResource> WithLocalEdge(
+        this IResourceBuilder<ProtoStrapEnvironmentResource> builder, int port)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(port, 1);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(port, 65535);
+        builder.Resource.LocalEdgePort = port;
+        if (builder.ApplicationBuilder.ExecutionContext.IsPublishMode)
+            return builder;
+        if (builder.Resource.LocalEdge is { } edge)
+            edge.Annotations.OfType<EndpointAnnotation>().Single(e => e.Name == "http").Port = port;
+        else
+            LocalEdge.Add(builder.ApplicationBuilder, builder.Resource);
         return builder;
     }
 
@@ -80,14 +102,15 @@ public static class ProtoStrapEnvironmentExtensions
     /// </summary>
     internal static void AddHostVariables(IEnumerable<IResource> resources, ProtoStrapEnvironmentResource environment)
     {
-        foreach (var resource in resources.OfType<IResourceWithEnvironment>().Where(r => r is IComputeResource).ToList())
+        foreach (var resource in resources.OfType<IResourceWithEnvironment>().Where(r => r is IComputeResource && r != environment.LocalEdge).ToList())
         {
             resource.Annotations.Add(new EnvironmentCallbackAnnotation(context =>
             {
+                var port = environment.LocalEdgePort.ToString(CultureInfo.InvariantCulture);
                 foreach (var host in environment.HostSettings)
                 {
                     context.EnvironmentVariables[HostVariable("HOST_", host.Name)] = host.Local;
-                    context.EnvironmentVariables[HostVariable("ORIGIN_", host.Name)] = "http://" + host.Local;
+                    context.EnvironmentVariables[HostVariable("ORIGIN_", host.Name)] = $"http://{host.Local}:{port}";
                 }
             }));
         }

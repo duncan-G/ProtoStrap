@@ -40,10 +40,15 @@ func TestTheListenerCanListenElsewhere(t *testing.T) {
 }
 
 // Browsers send the host with the port they used, such as admin.dev.localhost:20000, so the
-// edge matches a host whatever its port.
+// edge matches a host whatever its port, and leaves the Host header as it came, for the
+// redirect URLs services build from it.
 func TestHostsMatchWhateverThePort(t *testing.T) {
-	if lds := Files(local())["edge/lds.json"]; !strings.Contains(lds, `"strip_any_host_port": true`) {
-		t.Errorf("the listener matches a host only without a port")
+	got := jsonOf(decode(t, Files(local())["edge/lds.json"]))
+	if !strings.Contains(got, `"domains":["admin.dev.localhost","admin.dev.localhost:*"]`) {
+		t.Errorf("the virtual host matches admin.dev.localhost only without a port:\n%s", got)
+	}
+	if strings.Contains(got, "strip_any_host_port") || strings.Contains(got, "strip_matching_host_port") {
+		t.Errorf("the listener strips the port from the Host header services see")
 	}
 }
 
@@ -131,6 +136,27 @@ func TestWriteLocal(t *testing.T) {
 	for _, name := range []string{ListenerFile, ClustersFile} {
 		if _, err := os.Stat(dir + "/" + name); err != nil {
 			t.Errorf("%s: %v", name, err)
+		}
+	}
+}
+
+// Locally a gRPC check asks for the server as a whole: a service's name protects against an
+// address reused by another service on the overlay, which doesn't happen under `aspire run`,
+// where the AppHost gives no replica PROTOSTRAP_COMPONENT to answer for.
+func TestALocalGRPCCheckDoesntNameTheService(t *testing.T) {
+	r := local()
+	r.Local = true
+	api := jsonOf(cluster(t, r.Services, "api"))
+	if !strings.Contains(api, `"service_name":"api"`) {
+		t.Errorf("the test's cluster helper renders without Local:\n%s", api)
+	}
+	v := decode(t, Files(r)["edge/cds.json"])
+	for _, res := range v["resources"].([]any) {
+		c := res.(map[string]any)
+		if c["name"] == "api" {
+			if got := jsonOf(c["health_checks"]); !strings.Contains(got, `"grpc_health_check":{}`) {
+				t.Errorf("api's local check:\n%s", got)
+			}
 		}
 	}
 }

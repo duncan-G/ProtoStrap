@@ -167,17 +167,17 @@ type Component struct {
 	// Ready is the readiness check, as a spec writes it, such as "grpc" or "9000/healthz",
 	// and ReadyCommand is a command run in the replica instead. Parse sets one of them from
 	// the spec's ready, which ReadyAs holds as written.
-	Ready        string            `yaml:"-"`
-	ReadyCommand []string          `yaml:"-"`
-	ReadyAs      readyAs           `yaml:"ready"`
-	Routes       []Route           `yaml:"routes"`
+	Ready        string   `yaml:"-"`
+	ReadyCommand []string `yaml:"-"`
+	ReadyAs      readyAs  `yaml:"ready"`
+	Routes       []Route  `yaml:"routes"`
 	// Authorize has the edge ask another service about each request to this one's routes
 	// before sending it on.
 	Authorize *Authorize        `yaml:"authorize"`
 	Metrics   string            `yaml:"metrics"`
-	DependsOn    []string          `yaml:"depends_on"`
-	Uses         []string          `yaml:"uses"`
-	Env          map[string]string `yaml:"env"`
+	DependsOn []string          `yaml:"depends_on"`
+	Uses      []string          `yaml:"uses"`
+	Env       map[string]string `yaml:"env"`
 	// Secrets are the keys the component reads from the environment's secret, without their
 	// prefix.
 	Secrets []string `yaml:"secrets"`

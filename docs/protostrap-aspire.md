@@ -248,9 +248,10 @@ sees them.
 Two kinds of resource are replaced rather than excluded:
 
 - **A gateway.** ProtoStrap's [edge](protostrap.md#edge), cloudflared and Envoy on each
-  zone's ingress VM, is the gateway in publish mode. ProtoFast's Envoy resource stays for
-  local routing and is excluded from publish, and each service's `Routes(...)` becomes its
-  `routes` in the spec.
+  zone's ingress VM, is the gateway in an account, and its Envoy is the gateway under
+  `aspire run` too ([The local edge](#the-local-edge)). An application's own Envoy or YARP
+  for local routing is excluded from publish, or dropped: each service's `Routes(...)` and
+  `Authorize(...)` route it in both.
 - **Bind mounts.** A replica can't mount the repository. Files the program reads once, such
   as Keycloak's themes and providers, go into the image. Files it reloads become
   [config files](config.md) with `WithProtoStrapConfig`, which is a read-only bind mount
@@ -751,6 +752,31 @@ can be wired to call `protostrap deploy` for convenience.
 
 
 ## Local development
+
+### The local edge
+
+When the environment has hosts, `aspire run` runs the edge too: a container,
+`protostrap-edge`, of the Envoy an account's edge runs (`envoyproxy/envoy` at the edge's
+version), configured by the same renderer.
+
+- **It serves each host's local hostname** from `WithHost(..., local: "admin.dev.localhost")`
+  on one port, 20000 unless `WithLocalEdge(port: ...)` says otherwise: browsers open
+  `http://admin.dev.localhost:20000`. Every resource gets `HOST_<NAME>` with the local
+  hostname and `ORIGIN_<NAME>` with `http://` and that port.
+- **It routes what the spec routes:** each service's routes, protocol, readiness check, rate
+  limits and authorizer, read from the same `PublishAsProtoStrapService` call, so gRPC-Web
+  translation, `authorize` and a check that answers only for its own name behave as they
+  will in an account.
+- **It reaches services where the AppHost runs them:** a project at
+  `host.docker.internal` on its port, a container by its name on Aspire's network. Its
+  gRPC checks ask for the server as a whole (service `""`), since no replica has
+  `PROTOSTRAP_COMPONENT` there; HTTP checks still send the component's name as the host,
+  which a service skips testing outside ProtoStrap.
+- **It is rendered by `protostrap edge render`,** just before the container starts, once every
+  endpoint has its port. The AppHost writes the routing to `obj/protostrap-edge/routing.json`
+  and the renderer writes Envoy's files beside it, which the container mounts. `protostrap`
+  must be on `PATH` (or named by `WithCheck(...)`), built from the ProtoStrap checkout at the
+  AppHost's version; without it the edge doesn't start, and says so.
 
 - **`aspire run` is unchanged.** `PublishAsProtoStrap*` callbacks and the ProtoStrap
   environment do nothing in run mode.

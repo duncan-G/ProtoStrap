@@ -332,9 +332,9 @@ public class EnvironmentTests
         {
             var env = await RunModeEnvironmentAsync(resource);
             Assert.Equal("app.dev.localhost", env["HOST_APP"]);
-            Assert.Equal("http://app.dev.localhost", env["ORIGIN_APP"]);
+            Assert.Equal("http://app.dev.localhost:20000", env["ORIGIN_APP"]);
             Assert.Equal("admin.dev.localhost", env["HOST_ADMIN_CONSOLE"]);
-            Assert.Equal("http://admin.dev.localhost", env["ORIGIN_ADMIN_CONSOLE"]);
+            Assert.Equal("http://admin.dev.localhost:20000", env["ORIGIN_ADMIN_CONSOLE"]);
         }
     }
 

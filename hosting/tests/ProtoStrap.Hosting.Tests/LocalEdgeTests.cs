@@ -149,7 +149,8 @@ public class LocalEdgeTests
                 "app": "app.dev.localhost",
                 "auth": "auth.dev.localhost"
               },
-              "listen": "0.0.0.0:10000"
+              "listen": "0.0.0.0:10000",
+              "local": true
             }
             """, routing);
     }

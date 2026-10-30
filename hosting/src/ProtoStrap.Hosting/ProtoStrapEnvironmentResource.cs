@@ -38,6 +38,12 @@ public sealed class ProtoStrapEnvironmentResource : Resource, IComputeEnvironmen
     /// <summary>HostSettings are the hosts as WithHost was given them, in order.</summary>
     internal List<HostSettings> HostSettings { get; } = [];
 
+    /// <summary>LocalEdgePort is the port the edge serves the local hostnames on under `aspire run`.</summary>
+    internal int LocalEdgePort { get; set; } = ProtoStrap.Hosting.LocalEdge.DefaultPort;
+
+    /// <summary>LocalEdge is the edge's container under `aspire run`, once added.</summary>
+    internal ContainerResource? LocalEdge { get; set; }
+
     internal IngressPoolSettings? IngressPool { get; set; }
 
     internal ScalingPoolSettings? GeneralPool { get; set; }

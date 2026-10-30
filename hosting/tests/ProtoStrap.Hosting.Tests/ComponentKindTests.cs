@@ -275,17 +275,20 @@ public class ComponentKindTests
     }
 
     [Fact]
-    public void ACallbackRunsOnlyInPublishMode()
+    public void ACallbackRunsOnlyWhenItsSettingsAreRead()
     {
         using var repo = new FixtureRepo();
         var builder = TestApp.Run(repo);
         builder.AddEnvironment();
 
+        // Under `aspire run` the local edge reads a service's routes, so the call is kept, but
+        // nothing runs it until then, and sources mean nothing.
         var api = builder.AddProject("api", repo.Project("services/api/Api.csproj", "Microsoft.NET.Sdk.Web"))
             .PublishAsProtoStrapService(_ => throw new InvalidOperationException("ran in run mode"))
             .WithProtoStrapSources("protos/**");
 
-        Assert.DoesNotContain(api.Resource.Annotations, a => a.GetType().Namespace?.StartsWith("ProtoStrap", StringComparison.Ordinal) == true);
+        Assert.Single(api.Resource.Annotations, a => a.GetType().Name == "ProtoStrapComponentAnnotation");
+        Assert.DoesNotContain(api.Resource.Annotations, a => a.GetType().Name == "ProtoStrapSourcesAnnotation");
     }
 
     [Fact]

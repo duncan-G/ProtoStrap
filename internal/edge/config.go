@@ -103,6 +103,9 @@ type Routing struct {
 	// Listen is where Envoy listens, host:port. Empty is 127.0.0.1:8080, where cloudflared
 	// reaches it.
 	Listen string `json:"listen,omitempty"`
+	// Local is the edge `aspire run` runs, where gRPC checks don't name the service: no
+	// address is reused there, and no replica has PROTOSTRAP_COMPONENT to answer for.
+	Local bool `json:"local,omitempty"`
 }
 
 // listen is where the listener listens.
@@ -145,7 +148,7 @@ func Files(cfg Routing) map[string]string {
 	slices.SortFunc(services, func(a, b Service) int { return strings.Compare(a.Name, b.Name) })
 	return map[string]string{
 		"edge/" + ListenerFile: render(listener(services, cfg)),
-		"edge/" + ClustersFile: render(clusters(services)),
+		"edge/" + ClustersFile: render(clusters(services, cfg.Local)),
 	}
 }
 
@@ -260,10 +263,7 @@ func listener(services []Service, cfg Routing) obj {
 				"@type":       "type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager",
 				"stat_prefix": "edge",
 				// cloudflared is the only client, so the address Cloudflare passes is trusted.
-				"use_remote_address": false,
-				// A browser sends the port it used, such as admin.dev.localhost:20000 under
-				// `aspire run`; hosts match whatever it is.
-				"strip_any_host_port":          true,
+				"use_remote_address":           false,
 				"common_http_protocol_options": obj{"idle_timeout": "300s"},
 				"route_config":                 obj{"name": "routes", "virtual_hosts": vhosts},
 				"http_filters": slices.Concat(
@@ -345,14 +345,20 @@ func virtualHost(host string, routes []routeEntry) obj {
 	if rs == nil {
 		rs = []any{}
 	}
-	return obj{"name": host, "domains": []any{host}, "routes": rs}
+	domains := []any{host}
+	if host != "*" {
+		// A browser sends the port it used, such as admin.dev.localhost:20000 under `aspire
+		// run`. The host matches whatever it is, and services still see the port.
+		domains = append(domains, host+":*")
+	}
+	return obj{"name": host, "domains": domains, "routes": rs}
 }
 
 // clusters is one cluster per routed service. Each cluster finds the service's replicas by
 // looking its name up on the overlay every 5 seconds, balances each request across them,
 // and sends only to those passing their readiness check, which asks for the service by its
 // own name.
-func clusters(services []Service) obj {
+func clusters(services []Service, local bool) obj {
 	authorizers := map[string]bool{}
 	for _, s := range services {
 		if s.Authorize != nil && len(s.Routes) > 0 {
@@ -376,7 +382,11 @@ func clusters(services []Service) obj {
 		}
 		switch check.Kind {
 		case probe.CheckGRPC:
-			hc["grpc_health_check"] = obj{"service_name": s.Name}
+			if local {
+				hc["grpc_health_check"] = obj{}
+			} else {
+				hc["grpc_health_check"] = obj{"service_name": s.Name}
+			}
 		case probe.CheckTCP:
 			hc["tcp_health_check"] = obj{}
 		default:

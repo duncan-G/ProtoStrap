@@ -1,6 +1,5 @@
 using System.Diagnostics;
 using System.Globalization;
-using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
@@ -16,7 +15,7 @@ namespace ProtoStrap.Hosting;
 /// `protostrap edge render`, from the same routes, hosts and authorizers. It serves each
 /// host's local hostname on one port, and reaches each service where the AppHost runs it.
 /// </summary>
-internal static partial class LocalEdge
+internal static class LocalEdge
 {
     /// <summary>Name is the edge's resource name.</summary>
     public const string Name = "protostrap-edge";
@@ -124,11 +123,19 @@ internal static partial class LocalEdge
         var services = new List<(IResource Resource, ComponentSettings Settings)>();
         foreach (var resource in resources.Where(r => r is IResourceWithEndpoints && !r.IsExcludedFromPublish()).OrderBy(r => r.Name, StringComparer.Ordinal))
         {
-            if (resource.TryGetLastAnnotation<ProtoStrapComponentAnnotation>(out var annotation)
-                && annotation.Configure() is { Kind: ComponentKind.Service } settings)
+            if (!resource.TryGetLastAnnotation<ProtoStrapComponentAnnotation>(out var annotation))
+                continue;
+            ComponentSettings settings;
+            try
             {
-                services.Add((resource, settings));
+                settings = annotation.Configure();
             }
+            catch (Exception e)
+            {
+                throw new InvalidOperationException($"{resource.Name}: {annotation.Method} failed, so the local edge can't route to it: {e.Message}", e);
+            }
+            if (settings.Kind == ComponentKind.Service)
+                services.Add((resource, settings));
         }
         var authorizers = services.Where(s => s.Settings.Routes.Count > 0 && s.Settings.Authorize is not null)
             .Select(s => s.Settings.Authorize!.By).ToHashSet();
@@ -147,7 +154,7 @@ internal static partial class LocalEdge
             var address = await resolve(resource, primary);
             var port = int.Parse(address[(address.LastIndexOf(':') + 1)..], CultureInfo.InvariantCulture);
 
-            var (ready, checkEndpoint) = Readiness(resource, settings, endpoints, primary);
+            var (ready, checkEndpoint) = CheckOf(resource, settings, endpoints, primary);
             int? healthPort = null;
             if (checkEndpoint is not null && checkEndpoint != primary)
             {
@@ -172,7 +179,8 @@ internal static partial class LocalEdge
         var routing = new Routing(
             routed,
             environment.HostSettings.Count == 0 ? null : environment.HostSettings.GroupBy(h => h.Name).ToDictionary(g => g.Key, g => g.Last().Local, StringComparer.Ordinal),
-            "0.0.0.0:" + listenPort.ToString(CultureInfo.InvariantCulture));
+            "0.0.0.0:" + listenPort.ToString(CultureInfo.InvariantCulture),
+            Local: true);
         return JsonSerializer.Serialize(routing, JsonOptions);
     }
 
@@ -186,10 +194,10 @@ internal static partial class LocalEdge
     }
 
     /// <summary>
-    /// Readiness is the service's check as the spec writes it, and the endpoint it runs on when
+    /// CheckOf is the service's check as the spec writes it, and the endpoint it runs on when
     /// that is known: its own, or another the AppHost gives it.
     /// </summary>
-    private static (Readiness? Ready, EndpointAnnotation? Endpoint) Readiness(
+    private static (Readiness? Ready, EndpointAnnotation? Endpoint) CheckOf(
         IResource resource, ComponentSettings settings, List<EndpointAnnotation> endpoints, EndpointAnnotation primary)
     {
         if (settings.Ready is { } ready)
@@ -212,8 +220,8 @@ internal static partial class LocalEdge
             return (null, null);
         var endpoint = endpoints.FirstOrDefault(e => e.Name == endpointName) ?? primary;
         return endpoint == primary || endpoint.TargetPort is not { } port
-            ? (Aspire.Hosting.Readiness.Http(path), endpoint)
-            : (Aspire.Hosting.Readiness.Http(path).On(port), endpoint);
+            ? (Readiness.Http(path), endpoint)
+            : (Readiness.Http(path).On(port), endpoint);
     }
 
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -226,7 +234,7 @@ internal static partial class LocalEdge
 
     // These records are internal/edge's Routing, Service, Route and Authorize, as JSON.
 
-    private sealed record Routing(IReadOnlyList<RoutedService> Services, IReadOnlyDictionary<string, string>? Hosts, string Listen);
+    private sealed record Routing(IReadOnlyList<RoutedService> Services, IReadOnlyDictionary<string, string>? Hosts, string Listen, bool Local);
 
     private sealed record RoutedService(
         string Name, int Port, string Ready, string Protocol, IReadOnlyList<RoutedRoute>? Routes, RoutedAuthorize? Authorize,

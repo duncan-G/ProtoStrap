@@ -169,6 +169,14 @@ builder.AddProject<Projects.Shop_OrdersWorker>("orders-worker")
 
 ## Run mode
 
+- **With hosts, `aspire run` runs the edge** (`protostrap-edge`): the Envoy an account runs,
+  serving `http://<local hostname>:20000` with each service's routes and authorizer. It
+  needs `protostrap` on `PATH` (`go build -o ~/.local/bin/protostrap ./cmd/protostrap` in a
+  ProtoStrap checkout at the AppHost's version). Don't add a gateway of the application's
+  own for local routing: test routes through this one.
+- Every resource gets `HOST_<NAME>` (the local hostname) and `ORIGIN_<NAME>`
+  (`http://<local hostname>:20000`).
+
 - Queues and buckets are created in one LocalStack container, `protostrap-localstack`, and
   `WithReference` sets `QUEUE_<NAME>_URL`, `BUCKET_<NAME>`, `FILES_BUCKET`, `AWS_REGION`,
   `AWS_ENDPOINT_URL_SQS` and `AWS_ENDPOINT_URL_S3` to it.
@@ -199,9 +207,9 @@ builder.AddProject<Projects.Shop_OrdersWorker>("orders-worker")
   or a command argument.
 - A project with no `global.json` at or above it pinning `sdk.version`.
 
-Dev-only resources (pgAdmin, smtp4dev, a local gateway, seeders) get `.ExcludeFromManifest()`,
-or aren't added when `builder.ExecutionContext.IsPublishMode`. A local Envoy or YARP is
-excluded: the edge is the gateway, from each service's `Routes`.
+Dev-only resources (pgAdmin, smtp4dev, seeders) get `.ExcludeFromManifest()`, or aren't
+added when `builder.ExecutionContext.IsPublishMode`. No local Envoy or YARP: the edge is the
+gateway in both modes, from each service's `Routes` and `Authorize`.
 
 ## Warnings worth fixing
 
