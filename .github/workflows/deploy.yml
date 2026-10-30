@@ -60,7 +60,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - uses: aws-actions/configure-aws-credentials@v4
+      - uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
@@ -69,12 +69,12 @@ jobs:
 
       # A component with a build directory is built from its Dockerfile, for arm64 under
       # QEMU on the x86 runner.
-      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-qemu-action@v4
         if: matrix.build.project == ''
         with:
           platforms: arm64
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
         if: matrix.build.project == ''
 
       - name: Build and push ${{ matrix.build.image }}
@@ -90,7 +90,7 @@ jobs:
       # A component with a project is built with the .NET SDK's container publish, using
       # the SDK its global.json pins. protostrap plan found it, the nearest one at or above
       # the project's directory, and refuses a project without one.
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v6
         if: matrix.build.project != ''
         with:
           global-json-file: ${{ matrix.build.global_json }}
@@ -156,7 +156,7 @@ jobs:
 
       # The credentials last two hours: the job waits for the rollout, which may take up to
       # 80 minutes.
-      - uses: aws-actions/configure-aws-credentials@v4
+      - uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
@@ -164,7 +164,7 @@ jobs:
 
       - uses: aws-actions/amazon-ecr-login@v2
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
 
       # VMs run the arm64 build of the same source; the runner uses its own.
       - name: The protostrap binary
