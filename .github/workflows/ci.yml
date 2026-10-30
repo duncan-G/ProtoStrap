@@ -42,7 +42,8 @@ jobs:
       - uses: actions/checkout@v5
       - uses: hashicorp/setup-terraform@v3
         with:
-          terraform_version: 1.10.5
+          # The platform's tests use run blocks' state_key, which Terraform 1.10 can't parse.
+          terraform_version: 1.16.1
       - run: terraform fmt -check -recursive infra sample/infra
       - name: Validate
         run: |

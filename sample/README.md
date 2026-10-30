@@ -90,8 +90,9 @@ gh workflow run sample-infra.yml -f action=apply
 
 It builds the network, the buckets, the queue, a secret, a log group, a role and an image
 repository per component, the Cloudflare tunnel and its DNS record, and the VMs: one
-ingress VM, the general pool at its minimum, an empty compute pool and data-1. Pushes to
-`main` that change the sample's spec or infrastructure apply it again.
+ingress VM, the general pool at its minimum, an empty compute pool and data-1. The
+workflow runs only by hand: after a change to the sample's spec or infrastructure, run it
+again.
 
 The VMs boot and wait: there is no `protostrap` binary in the account until the first
 deploy puts one there.
@@ -125,7 +126,7 @@ scripts/set-secret.sh sample/dev Reporter_ANTHROPIC_API_KEY=-
 
 ## 4. Deploy
 
-Every push to `main` deploys, or run it by hand:
+The deploy workflow runs only by hand:
 
 ```bash
 gh workflow run sample-deploy.yml

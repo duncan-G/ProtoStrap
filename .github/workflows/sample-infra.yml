@@ -1,20 +1,13 @@
 # This workflow runs Terraform for the sample's infrastructure in the dev account,
-# sample/infra/dev, which builds the platform from sample/protostrap.yaml. It runs on
-# changes to infra/bootstrap, infra/platform or the sample's infra, and by hand to plan,
-# apply or destroy.
+# sample/infra/dev, which builds the platform from sample/protostrap.yaml. It runs only by
+# hand, to plan, apply or destroy, so nothing reaches AWS until the dev account is
+# bootstrapped and someone asks for a change.
 #
 # An application's own repository has a copy of this, calling
 # duncan-G/protostrap/.github/workflows/infra.yml@<version> with protostrap-ref set.
 name: sample-infra
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - infra/bootstrap/**
-      - infra/platform/**
-      - sample/infra/dev/**
-      - sample/protostrap.yaml
   workflow_dispatch:
     inputs:
       action:
@@ -23,6 +16,11 @@ on:
         options: [plan, apply, destroy]
         default: plan
 
+# The reusable workflow signs in to AWS with GitHub's OIDC token.
+permissions:
+  contents: read
+  id-token: write
+
 jobs:
   infra:
     uses: ./.github/workflows/infra.yml
@@ -30,5 +28,5 @@ jobs:
       environment: dev
       directory: sample/infra/dev
       spec: sample/protostrap.yaml
-      action: ${{ github.event_name == 'push' && 'apply' || inputs.action }}
+      action: ${{ inputs.action }}
     secrets: inherit

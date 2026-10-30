@@ -1,6 +1,7 @@
-# This workflow deploys the sample to the dev account on every push to main, with no path
-# filters: plan compares with what exists, so a push that changes nothing deployable ends
-# after plan, and a component left behind by a failed deploy is picked up by the next one.
+# This workflow deploys the sample to the dev account. It runs only by hand, so nothing
+# reaches AWS until the dev account is bootstrapped and someone asks for a deploy. Plan
+# compares with what exists, so a run that changes nothing deployable ends after plan, and
+# a component left behind by a failed deploy is picked up by the next one.
 #
 # The ProtoStrap version is the spec's plus a hash of ProtoStrap's own source
 # (dev-version), so a change to the scheduler, the agent or the edge ships with the sample
@@ -11,9 +12,12 @@
 name: sample-deploy
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
+
+# The reusable workflows sign in to AWS with GitHub's OIDC token.
+permissions:
+  contents: read
+  id-token: write
 
 concurrency:
   group: sample-deploy-dev
