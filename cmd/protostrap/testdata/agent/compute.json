@@ -1,0 +1,17 @@
+{
+  "app": "shop",
+  "pool": "compute",
+  "scheduler": "10.20.1.10:7443",
+  "scheduler_ca": "/etc/protostrap/scheduler-ca.pem",
+  "scheduler_ca_key": "scheduler/ca.pem",
+  "auto_scaling_group": "shop-compute-spot-a",
+  "launch_hook": "protostrap-launch",
+  "terminate_hook": "protostrap-terminate",
+  "terminate_hook_timeout": "10m",
+  "deploy_bucket": "shop-deploy",
+  "network": {
+    "vpc": "10.20.0.0/16",
+    "resolver": "10.20.0.2",
+    "managed": ["10.20.2.0/24"]
+  }
+}

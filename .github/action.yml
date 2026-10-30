@@ -1,0 +1,49 @@
+# This action builds the protostrap CLI from source and puts it on the PATH. The workflows
+# use it to check the spec, plan a release and write it. It also builds the same source for
+# linux/arm64, which the release job ships to the deploy bucket, where VMs install it, and
+# into the edge image: every VM is Graviton.
+name: protostrap
+description: Build the protostrap CLI from a ProtoStrap source tree.
+
+inputs:
+  source:
+    description: The ProtoStrap source tree.
+    default: .
+  version:
+    description: The version to stamp the binary with.
+    default: 0.0.0-dev
+
+outputs:
+  binary:
+    description: The built binary, for the runner.
+    value: ${{ steps.build.outputs.binary }}
+  vm-binary:
+    description: The built binary, linux/arm64, for VMs and the edge image.
+    value: ${{ steps.build.outputs.vm-binary }}
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-go@v5
+      with:
+        go-version-file: ${{ inputs.source }}/go.mod
+        cache: false
+
+    - id: build
+      shell: bash
+      working-directory: ${{ inputs.source }}
+      env:
+        VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        out="$RUNNER_TEMP/protostrap-bin"
+        mkdir -p "$out"
+        flags=(-trimpath -ldflags "-s -w -X main.version=$VERSION")
+        CGO_ENABLED=0 go build "${flags[@]}" -o "$out/protostrap" ./cmd/protostrap
+        vm="$RUNNER_TEMP/protostrap-vm"
+        mkdir -p "$vm"
+        CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build "${flags[@]}" -o "$vm/protostrap" ./cmd/protostrap
+        echo "$out" >> "$GITHUB_PATH"
+        echo "binary=$out/protostrap" >> "$GITHUB_OUTPUT"
+        echo "vm-binary=$vm/protostrap" >> "$GITHUB_OUTPUT"
+        "$out/protostrap" version

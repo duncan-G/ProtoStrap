@@ -1,0 +1,16 @@
+# This unit installs the protostrap binary from the deploy bucket, once. The agent updates
+# it after.
+[Unit]
+Description=Install protostrap from the deploy bucket
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=!/usr/local/bin/protostrap
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+EnvironmentFile=/etc/protostrap/install.env
+ExecStart=/usr/local/libexec/protostrap-install
+TimeoutStartSec=infinity
+Restart=on-failure
+RestartSec=30

@@ -1,0 +1,14 @@
+<Project>
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageVersion Include="AWSSDK.SecretsManager" Version="4.0.100.2" />
+    <PackageVersion Include="AWSSDK.SQS" Version="4.0.100.14" />
+    <PackageVersion Include="Grpc.AspNetCore" Version="2.71.0" />
+    <PackageVersion Include="Grpc.HealthCheck" Version="2.71.0" />
+    <PackageVersion Include="Microsoft.Extensions.Hosting" Version="10.0.5" />
+    <PackageVersion Include="Npgsql" Version="9.0.3" />
+    <PackageVersion Include="StackExchange.Redis" Version="2.9.32" />
+  </ItemGroup>
+</Project>

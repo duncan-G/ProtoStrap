@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/Solution Items/">
+    <File Path="Directory.Build.props" />
+    <File Path="Directory.Packages.props" />
+  </Folder>
+  <Project Path="Api/Api.csproj" />
+  <Project Path="Migrate/Migrate.csproj" />
+  <Project Path="Shared/Shared.csproj" />
+  <Project Path="Worker/Worker.csproj" />
+</Solution>

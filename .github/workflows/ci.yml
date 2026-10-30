@@ -1,0 +1,57 @@
+# This workflow runs ProtoStrap's own checks: the Go tests, the spec checker on the sample,
+# ProtoStrap.Hosting's tests, and the Terraform modules' formatting, validation and mocked
+# tests.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+      - run: go vet ./...
+      - run: go test -race ./...
+      - run: go run ./cmd/protostrap check --spec sample/protostrap.yaml
+
+  hosting:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      # The tests trace real projects with `dotnet msbuild`, and generate the spec that the Go
+      # tests read back from hosting/tests/ProtoStrap.Hosting.Tests/Golden.
+      - run: dotnet test hosting/ProtoStrap.Hosting.slnx
+      - run: git diff --exit-code hosting/tests/ProtoStrap.Hosting.Tests/Golden
+
+  terraform:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.10.5
+      - run: terraform fmt -check -recursive infra sample/infra
+      - name: Validate
+        run: |
+          set -euo pipefail
+          for dir in infra/bootstrap infra/platform infra/people sample/infra/bootstrap sample/infra/dev; do
+            echo "::group::$dir"
+            terraform -chdir="$dir" init -backend=false -input=false
+            terraform -chdir="$dir" validate
+            echo "::endgroup::"
+          done
+      - name: Test the platform with mocked providers
+        run: terraform -chdir=infra/platform test

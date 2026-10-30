@@ -1,0 +1,202 @@
+# The sample application has one component of every kind, is small enough to run in a dev
+# account, and is built to be pushed around. Each service and the worker has a knob for
+# load (see sample/README.md and sample/services/README.md), so deploys, replica scaling,
+# VM scaling and scaling from zero can all be tested end to end.
+#
+# The sample has one host, sample. Its hostname differs between accounts, so each account's
+# Terraform config gives it one (sample/infra/dev/main.tf). Routes are paths, which match
+# every host.
+app: sample
+protostrap: 0.1.0
+hosts:
+  sample: sample.example.com
+
+pools:
+  ingress: { vm: c8g.medium }
+  general:
+    vm: [m7g.large, m6g.large, m8g.large, m7gd.large]
+    min: 1
+    max: 4
+    spare: 1
+    target: 70%
+    reserved: { cpu: 400m, memory: 1Gi }
+  compute:
+    vm: [c7g.large, c6g.large, c8g.large, c7gd.large]
+    min: 0
+    max: 4
+    spare: 0
+    target: 85%
+    reserved: { cpu: 400m, memory: 1Gi }
+  data: { vm: m7g.large, count: 1 }
+
+edge:
+  request: { cpu: 500m, memory: 256Mi }
+
+queues:
+  jobs: {}
+
+components:
+  # The api is a .NET gRPC service. It burns CPU on request, puts jobs on the queue, and
+  # exports the worker's budget cap, so the cap is known while the worker is at zero.
+  api:
+    kind: service
+    build: services/dotnet/Api
+    context: services/dotnet
+    sources:
+      - services/dotnet/Directory.Build.props
+      - services/dotnet/Directory.Packages.props
+      - services/dotnet/Shared
+    pool: general
+    request: { cpu: 500m, memory: 512Mi }
+    port: 8080
+    ready: grpc
+    routes: [/api/, /sample.Api/]
+    metrics: 9090/metrics
+    depends_on: [postgres, redis]
+    uses: [jobs]
+    migrate: migrate
+    env:
+      JOBS_BUDGET: "100000"
+    secrets: [ConnectionStrings__postgres, ConnectionStrings__redis]
+    stop: 30s
+    scale:
+      min: 2
+      max: 8
+      demand: [{ cpu: 70% }]
+
+  # web is a Node.js Express service. It is single-threaded, so it scales out, on CPU per
+  # process and on event loop lag. It calls the api over the overlay, without the gateway.
+  web:
+    kind: service
+    build: services/web
+    pool: general
+    request: { cpu: 250m, memory: 256Mi }
+    port: 3000
+    ready: /healthz
+    routes: [/web/]
+    metrics: 9464/metrics
+    depends_on: [api]
+    env:
+      API_URL: http://api:8080
+    stop: 20s
+    scale:
+      min: 1
+      max: 8
+      demand:
+        - { cpu: 70% }
+        - { metric: nodejs_eventloop_lag_seconds, target: 0.05 }
+
+  # py is a Python FastAPI service. It scales on requests per second, counted by the edge,
+  # and on CPU.
+  py:
+    kind: service
+    build: services/py
+    pool: general
+    request: { cpu: 250m, memory: 256Mi }
+    port: 8000
+    ready: /healthz
+    routes: [{ route: /py/, rate: 200/s }]
+    metrics: 8000/metrics
+    depends_on: [redis]
+    secrets: [ConnectionStrings__redis]
+    stop: 20s
+    scale:
+      min: 1
+      max: 8
+      demand: [{ requests: 20/s }, { cpu: 70% }]
+
+  # jobs is a .NET worker. It drains the jobs queue, from zero, on general VMs first and
+  # then on compute. The budget cap the api exports holds it back.
+  jobs:
+    kind: worker
+    build: services/dotnet/Worker
+    context: services/dotnet
+    sources:
+      - services/dotnet/Directory.Build.props
+      - services/dotnet/Directory.Packages.props
+      - services/dotnet/Shared
+    pool: compute
+    request: { cpu: 500m, memory: 512Mi }
+    depends_on: [postgres, redis]
+    migrate: migrate
+    env:
+      JOBS_CONCURRENCY: "2"
+      JOBS_BUDGET: "100000" # Jobs over the month's budget go back to the queue.
+    secrets: [ConnectionStrings__postgres, ConnectionStrings__redis]
+    stop: 60s
+    scale:
+      min: 0
+      max: 12
+      demand: [{ queue: jobs, rate: 2/s, drain: 60s }]
+      limits: [{ metric: jobs_budget_cap }]
+
+  # migrate is a task that runs the database migrations, once in each release that changes
+  # them, before any new api or jobs replica.
+  migrate:
+    kind: task
+    build: services/dotnet/Migrate
+    context: services/dotnet
+    sources:
+      - services/dotnet/Directory.Build.props
+      - services/dotnet/Directory.Packages.props
+      - services/dotnet/Shared
+    pool: general
+    request: { cpu: 250m, memory: 256Mi }
+    depends_on: [postgres]
+    secrets: [ConnectionStrings__postgres]
+
+  postgres:
+    kind: stateful
+    image: postgres:17.6
+    vm: data-1
+    request: { cpu: 1000m, memory: 3Gi }
+    port: 5432
+    # The image's entrypoint still runs, and PostgreSQL reads its client authentication from
+    # config/postgres/pg_hba.conf, which the agent delivers.
+    command: [postgres, -c, hba_file=/etc/postgresql/conf/pg_hba.conf]
+    env:
+      # Its password is a file the agent writes from the environment's secret, and the
+      # network needs it. The socket inside the container still trusts, for the backup and
+      # for the hooks below.
+      POSTGRES_PASSWORD_FILE: /run/secrets/POSTGRES_PASSWORD
+      POSTGRES_HOST_AUTH_METHOD: scram-sha-256
+      PGDATA: /var/lib/postgresql/data/pgdata
+    # A new pg_hba.conf is checked, then reloaded: PostgreSQL never restarts, and a file it
+    # can't read fails the release rather than being ignored.
+    config: { from: config/postgres, path: /etc/postgresql/conf }
+    on_config_change: [sh, -c, 'psql -X -q -U postgres -d postgres -tAc "SELECT count(*) FROM pg_hba_file_rules WHERE error IS NOT NULL" | grep -qx 0 && psql -X -q -U postgres -d postgres -c "SELECT pg_reload_conf()"']
+    secrets: [POSTGRES_PASSWORD]
+    secret_files: true
+    # PostgreSQL reads POSTGRES_PASSWORD only when it first makes its data, so a new one is
+    # applied in place. psql reads the file itself: the password is never in a command line.
+    on_secret_change:
+      - sh
+      - -c
+      - 'printf ''%s\n'' ''\set pw `cat /run/secrets/POSTGRES_PASSWORD`'' "ALTER ROLE postgres PASSWORD :''pw'';" | psql -X -q -v ON_ERROR_STOP=1 -U postgres -d postgres'
+    volume: { path: /var/lib/postgresql/data, size: 20Gi }
+    backup: [pg_dumpall, -U, postgres]
+    stop: 60s
+
+  redis:
+    kind: stateful
+    image: redis:7.4
+    vm: data-1
+    request: { cpu: 500m, memory: 1Gi }
+    port: 6379
+    # Redis has no *_FILE variables: the image's own entrypoint starts it with the password
+    # from its file, so it still drops to the redis user.
+    command:
+      - sh
+      - -c
+      - exec docker-entrypoint.sh redis-server --requirepass "$(cat /run/secrets/REDIS_PASSWORD)" --appendonly yes --maxmemory 768mb --maxmemory-policy noeviction
+    secrets: [REDIS_PASSWORD]
+    secret_files: true
+    # A new password is set in place, logged in with the new one or, until it is set, the
+    # previous one. redis-cli reads it from the file, never a command line.
+    on_secret_change:
+      - sh
+      - -c
+      - 'for f in /run/secrets/REDIS_PASSWORD /run/secrets/previous/REDIS_PASSWORD; do [ -f "$f" ] && REDISCLI_AUTH="$(cat "$f")" redis-cli --no-auth-warning -x CONFIG SET requirepass </run/secrets/REDIS_PASSWORD | grep -qx OK && exit 0; done; exit 1'
+    volume: { path: /data, size: 5Gi }
+    backup: [sh, -c, 'REDISCLI_AUTH="$(cat /run/secrets/REDIS_PASSWORD)" exec redis-cli --no-auth-warning --rdb -']
+    stop: 30s

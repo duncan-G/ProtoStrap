@@ -1,0 +1,15 @@
+# This unit mounts the data VM's EBS volumes, found by their tags (protostrap-volumes.sh).
+[Unit]
+Description=Mount ProtoStrap's EBS volumes
+After=network-online.target local-fs.target
+Wants=network-online.target
+Before=docker.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/protostrap/volumes.env
+ExecStart=/usr/local/libexec/protostrap-volumes $VOLUMES_ARGS
+TimeoutStartSec=20min
+
+[Install]
+WantedBy=multi-user.target

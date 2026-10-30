@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <PackageId>ProtoStrap.Hosting</PackageId>
+    <Version>0.1.0</Version>
+    <Description>Describe a ProtoStrap application in an Aspire AppHost: the ProtoStrap environment, PublishAsProtoStrap* for each component, queues and files, and the protostrap-spec step that writes protostrap.yaml.</Description>
+    <PackageTags>aspire;hosting;protostrap</PackageTags>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Aspire.Hosting" Version="13.6.2" />
+    <!-- PublishAsProtoStrapStateful fills in what these integrations know: the port, the data
+         path and the dump command. -->
+    <PackageReference Include="Aspire.Hosting.PostgreSQL" Version="13.6.2" />
+    <PackageReference Include="Aspire.Hosting.Redis" Version="13.6.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="ProtoStrap.Hosting.Tests" />
+  </ItemGroup>
+
+</Project>

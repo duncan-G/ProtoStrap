@@ -1,0 +1,44 @@
+syntax = "proto3";
+
+// The gateway routes /sample.Api/ here, for gRPC and gRPC-Web alike.
+package sample;
+
+option csharp_namespace = "Sample.Rpc";
+
+service Api {
+  // Hello says which component, replica and release answered, and when.
+  rpc Hello (HelloRequest) returns (HelloReply);
+  // Burn spins until it has used ms milliseconds of CPU time (at most 5000); elapsed_ms is
+  // the wall-clock time that took, longer when the replica is short of CPU.
+  rpc Burn (BurnRequest) returns (BurnReply);
+  // Enqueue puts count jobs (at most 100000) on the jobs queue, each burning work_ms on a
+  // worker.
+  rpc Enqueue (EnqueueRequest) returns (EnqueueReply);
+}
+
+message HelloRequest {}
+
+message HelloReply {
+  string component = 1;
+  string replica = 2;
+  string release = 3;
+  string time = 4;
+}
+
+message BurnRequest {
+  int32 ms = 1;
+}
+
+message BurnReply {
+  int32 elapsed_ms = 1;
+  string replica = 2;
+}
+
+message EnqueueRequest {
+  int32 count = 1;
+  int32 work_ms = 2;
+}
+
+message EnqueueReply {
+  int32 sent = 1;
+}

@@ -1,0 +1,197 @@
+# This workflow plans a release (docs/protostrap-aspire.md#three-questions): it checks the
+# spec, works out every built component's image tag from its sources, and answers two of
+# the three questions by comparing with what exists, never with the last commit:
+#
+#   - Which images must be built?   It compares each tag with the tags in ECR.
+#   - Must infrastructure change?   It compares the spec's infra projection with the last apply.
+#
+# The scheduler answers the third, which replicas to replace, from fingerprints.
+#
+# An application's deploy workflow calls it (see sample-deploy.yml), in its deploy GitHub
+# environment, with the Deploy role.
+name: plan
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: The environment, such as dev. The job runs in its GitHub environment.
+        type: string
+        required: true
+      spec:
+        description: The application's protostrap.yaml.
+        type: string
+        default: protostrap.yaml
+      apphost:
+        description: The Aspire AppHost project that writes the spec with ProtoStrap.Hosting, if there is one. The spec is regenerated, and the job fails if the committed one isn't what the AppHost writes. It runs with the .NET SDK a global.json at or above it pins.
+        type: string
+        default: ""
+      protostrap-repository:
+        description: Where ProtoStrap's source is, when protostrap-ref is set.
+        type: string
+        default: duncan-G/protostrap
+      protostrap-ref:
+        description: The ProtoStrap version to build the CLI from, such as v0.1.0. Empty uses this repository, which is ProtoStrap itself.
+        type: string
+        default: ""
+      dev-version:
+        description: Version ProtoStrap itself by its source, as <spec version>-dev.<hash>, so a change to ProtoStrap ships even when the spec's version doesn't change. For testing ProtoStrap with the sample.
+        type: boolean
+        default: false
+    outputs:
+      version:
+        description: The ProtoStrap version the release runs.
+        value: ${{ jobs.plan.outputs.version }}
+      infra-changed:
+        description: Whether the infra projection differs from the last apply.
+        value: ${{ jobs.plan.outputs.infra-changed }}
+      builds:
+        description: The images missing from ECR, as a JSON list for a build matrix.
+        value: ${{ jobs.plan.outputs.builds }}
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    outputs:
+      version: ${{ steps.plan.outputs.version }}
+      infra-changed: ${{ steps.plan.outputs.infra-changed }}
+      builds: ${{ steps.plan.outputs.builds }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - if: inputs.protostrap-ref != ''
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ inputs.protostrap-repository }}
+          ref: ${{ inputs.protostrap-ref }}
+          path: .protostrap
+
+      - id: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          src=.
+          [ -n "${{ inputs.protostrap-ref }}" ] && src=.protostrap
+          echo "dir=$src" >> "$GITHUB_OUTPUT"
+
+      - uses: ./.github/actions/protostrap
+        if: inputs.protostrap-ref == ''
+        with:
+          source: .
+
+      - uses: ./.protostrap/.github/actions/protostrap
+        if: inputs.protostrap-ref != ''
+        with:
+          source: .protostrap
+
+      # A spec generated from an AppHost (docs/protostrap-aspire.md#the-deploy-workflow)
+      # is regenerated, with protostrap on the PATH to check it, and the job fails on any
+      # drift, such as a new project reference that no one regenerated the spec for. The
+      # AppHost runs with the SDK the nearest global.json at or above it pins: ProtoStrap
+      # never picks a .NET version.
+      - id: apphost-sdk
+        if: inputs.apphost != ''
+        shell: bash
+        env:
+          APPHOST: ${{ inputs.apphost }}
+        run: |
+          set -euo pipefail
+          # The AppHost is a project file or its directory, as dotnet run --project takes.
+          dir=$APPHOST
+          [ -d "$dir" ] || dir=$(dirname "$APPHOST")
+          echo "dir=$dir" >> "$GITHUB_OUTPUT"
+          while [ ! -f "$dir/global.json" ] && [ "$dir" != "." ] && [ "$dir" != "/" ]; do
+            dir=$(dirname "$dir")
+          done
+          if [ ! -f "$dir/global.json" ]; then
+            echo "::error file=$APPHOST::no global.json at or above $APPHOST pins the .NET SDK it runs with: add one that sets sdk.version"
+            exit 1
+          fi
+          echo "global-json=$dir/global.json" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-dotnet@v4
+        if: inputs.apphost != ''
+        with:
+          global-json-file: ${{ steps.apphost-sdk.outputs.global-json }}
+
+      - name: Regenerate the spec from the AppHost
+        if: inputs.apphost != ''
+        shell: bash
+        env:
+          APPHOST: ${{ inputs.apphost }}
+          APPHOST_DIR: ${{ steps.apphost-sdk.outputs.dir }}
+          SPEC: ${{ inputs.spec }}
+        run: |
+          set -euo pipefail
+          # The SDK reads global.json from the directory it runs in, not the project's, and
+          # the runner has SDKs of its own, so the AppHost runs in its own directory.
+          project=$(realpath "$APPHOST")
+          (cd "$APPHOST_DIR" && dotnet run --project "$project" -- --operation publish --step protostrap-spec)
+          if [ -n "$(git status --porcelain -- "$SPEC")" ]; then
+            git diff -- "$SPEC" || true
+            echo "::error file=$SPEC::$SPEC isn't what $APPHOST writes: run aspire do protostrap-spec and commit it"
+            exit 1
+          fi
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - id: plan
+        shell: bash
+        env:
+          SPEC: ${{ inputs.spec }}
+          SOURCE: ${{ steps.source.outputs.dir }}
+          DEV_VERSION: ${{ inputs.dev-version }}
+          ENVIRONMENT: ${{ inputs.environment }}
+          REGISTRY: ${{ vars.PROTOSTRAP_REGISTRY }}
+          DEPLOY_BUCKET: ${{ vars.PROTOSTRAP_DEPLOY_BUCKET }}
+        run: |
+          set -euo pipefail
+          protostrap check --spec "$SPEC"
+
+          version=$(protostrap plan --spec "$SPEC" --json | jq -r .protostrap)
+          if [ "$DEV_VERSION" = true ]; then
+            hash=$(git -C "$SOURCE" ls-files -s -- cmd internal edge go.mod | git hash-object --stdin | cut -c1-12)
+            version="$version-dev.$hash"
+          fi
+          protostrap plan --spec "$SPEC" --registry "$REGISTRY" --version "$version" --json > plan.json
+          jq . plan.json
+
+          applied=$(aws s3 cp "s3://$DEPLOY_BUCKET/infra/$ENVIRONMENT.sha256" - 2>/dev/null || true)
+          infra_changed=false
+          if [ "$applied" != "$(jq -r .infra_hash plan.json)" ]; then
+            infra_changed=true
+            echo "infra: the projection changed since the last apply"
+          fi
+
+          # Only the images whose tag isn't in ECR yet are listed to be built.
+          missing='[]'
+          while read -r build; do
+            component=$(jq -r .component <<<"$build")
+            tag=$(jq -r .tag <<<"$build")
+            if aws ecr describe-images --repository-name "protostrap/$component" --image-ids "imageTag=$tag" >/dev/null 2>&1; then
+              echo "$component: $tag is in ECR"
+            else
+              echo "$component: build $tag"
+              missing=$(jq -c --argjson b "$build" '. + [$b]' <<<"$missing")
+            fi
+          done < <(jq -c '.builds[]' plan.json)
+
+          {
+            echo "version=$version"
+            echo "infra-changed=$infra_changed"
+            echo "builds=$missing"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "### Plan for $ENVIRONMENT"
+            echo "- ProtoStrap $version"
+            echo "- infra changed: $infra_changed"
+            echo "- images to build: $(jq -r 'map(.component) | join(", ") | if . == "" then "none" else . end' <<<"$missing")"
+          } >> "$GITHUB_STEP_SUMMARY"

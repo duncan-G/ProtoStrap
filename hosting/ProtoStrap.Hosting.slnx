@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="src/ProtoStrap.Hosting/ProtoStrap.Hosting.csproj" />
+  <Project Path="tests/ProtoStrap.Hosting.Tests/ProtoStrap.Hosting.Tests.csproj" />
+</Solution>

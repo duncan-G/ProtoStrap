@@ -1,0 +1,49 @@
+# This workflow deploys the sample to the dev account on every push to main, with no path
+# filters: plan compares with what exists, so a push that changes nothing deployable ends
+# after plan, and a component left behind by a failed deploy is picked up by the next one.
+#
+# The ProtoStrap version is the spec's plus a hash of ProtoStrap's own source
+# (dev-version), so a change to the scheduler, the agent or the edge ships with the sample
+# without bumping the spec.
+#
+# An application's own repository has a copy of this, calling ProtoStrap's plan, infra and
+# deploy workflows at a version, with protostrap-ref set and dev-version off.
+name: sample-deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: sample-deploy-dev
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    uses: ./.github/workflows/plan.yml
+    with:
+      environment: dev
+      spec: sample/protostrap.yaml
+      dev-version: true
+
+  infra:
+    needs: plan
+    if: needs.plan.outputs.infra-changed == 'true'
+    uses: ./.github/workflows/infra.yml
+    with:
+      environment: dev
+      directory: sample/infra/dev
+      spec: sample/protostrap.yaml
+      action: apply
+    secrets: inherit
+
+  deploy:
+    needs: [plan, infra]
+    if: always() && needs.plan.result == 'success' && (needs.infra.result == 'success' || needs.infra.result == 'skipped')
+    uses: ./.github/workflows/deploy.yml
+    with:
+      environment: dev
+      spec: sample/protostrap.yaml
+      version: ${{ needs.plan.outputs.version }}
+      builds: ${{ needs.plan.outputs.builds }}

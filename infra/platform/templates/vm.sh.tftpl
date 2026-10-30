@@ -1,0 +1,99 @@
+#!/bin/bash
+# This script sets up a ProtoStrap VM in the ${pool} pool. Each pool's file in
+# infra/platform (ingress.tf, general.tf, compute.tf, data.tf) renders it with the shared
+# settings in agent.tf and its own. It runs once, from cloud-init, at the VM's first boot;
+# systemd starts everything on later boots.
+#
+#  1. It installs Docker and the ECR credential helper from Amazon Linux's repositories,
+#     which the VM reaches through the S3 gateway endpoint even before its zone's NAT is
+#     up.
+#  2. It sets Docker's address ranges, outside every VPC (docs/network.md#dockers-ranges).
+%{ if data_vm ~}
+#  3. It mounts the VM's EBS volumes before Docker starts.
+%{ endif ~}
+#  4. It writes the agent's config, and systemd units that install protostrap from the
+#     deploy bucket once the first deploy has put it there, then start the agent${scheduler ? ", the scheduler and the reporter" : ""}.
+set -euo pipefail
+exec >>/var/log/protostrap-setup.log 2>&1
+echo "protostrap setup: starting at $(date -Is)"
+
+dnf install -y docker amazon-ecr-credential-helper
+
+install -d -m 0755 /etc/docker /etc/protostrap /usr/local/libexec
+cat >/etc/docker/daemon.json <<'PROTOSTRAP_EOF'
+{
+  "bip": "172.17.0.1/24",
+  "default-address-pools": [{ "base": "172.19.0.0/16", "size": 24 }],
+  "log-driver": "json-file",
+  "log-opts": { "max-size": "10m", "max-file": "3" }
+}
+PROTOSTRAP_EOF
+
+# This lets operators on the VM `docker pull` from ECR with the VM's role.
+install -d -m 0700 /root/.docker
+echo '{ "credHelpers": { "${registry}": "ecr-login" } }' >/root/.docker/config.json
+
+cat >/etc/protostrap/install.env <<'PROTOSTRAP_EOF'
+DEPLOY_BUCKET=${deploy_bucket}
+AWS_DEFAULT_REGION=${region}
+ASG=${asg}
+LAUNCH_HOOK=${launch_hook}
+PROTOSTRAP_EOF
+
+cat >/usr/local/libexec/protostrap-install <<'PROTOSTRAP_EOF'
+${install_script}
+PROTOSTRAP_EOF
+chmod 0755 /usr/local/libexec/protostrap-install
+
+cat >/etc/protostrap/agent.json <<'PROTOSTRAP_EOF'
+${agent_config}
+PROTOSTRAP_EOF
+
+%{ for name, content in units ~}
+cat >/etc/systemd/system/${name} <<'PROTOSTRAP_EOF'
+${content}
+PROTOSTRAP_EOF
+%{ endfor ~}
+
+%{ if data_vm ~}
+cat >/usr/local/libexec/protostrap-volumes <<'PROTOSTRAP_EOF'
+${volumes_script}
+PROTOSTRAP_EOF
+chmod 0755 /usr/local/libexec/protostrap-volumes
+cat >/etc/protostrap/volumes.env <<'PROTOSTRAP_EOF'
+AWS_DEFAULT_REGION=${region}
+VOLUMES_ARGS=${swarm_manager ? "--wait /var/lib/protostrap/control" : ""}
+PROTOSTRAP_EOF
+/usr/local/libexec/protostrap-volumes ${swarm_manager ? "--wait /var/lib/protostrap/control" : ""}
+%{ endif ~}
+%{ if scheduler ~}
+cat >/etc/protostrap/scheduler.json <<'PROTOSTRAP_EOF'
+${scheduler_config}
+PROTOSTRAP_EOF
+%{ endif ~}
+
+systemctl daemon-reload
+systemctl enable --now docker
+
+# This makes the bridge that carries containers' traffic off their VM before the VM joins
+# the swarm, which would otherwise make it in Docker's default range.
+docker network inspect docker_gwbridge >/dev/null 2>&1 || docker network create \
+  --subnet 172.18.0.0/24 \
+  --opt com.docker.network.bridge.name=docker_gwbridge \
+  --opt com.docker.network.bridge.enable_icc=false \
+  --opt com.docker.network.bridge.enable_ip_masquerade=true \
+  docker_gwbridge
+
+%{ if data_vm ~}
+systemctl enable protostrap-volumes.service
+systemctl enable --now protostrap-volumes.timer
+%{ endif ~}
+systemctl enable protostrap-install.service protostrap-agent.service
+%{ if scheduler ~}
+systemctl enable protostrap-scheduler.service
+systemctl enable --now protostrap-report.timer
+systemctl start --no-block protostrap-scheduler.service
+%{ endif ~}
+# Installing waits for the first deploy, so don't hold up cloud-init for it.
+systemctl start --no-block protostrap-agent.service
+echo "protostrap setup: done at $(date -Is)"

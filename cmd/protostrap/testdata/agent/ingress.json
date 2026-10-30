@@ -1,0 +1,21 @@
+{
+  "app": "shop",
+  "pool": "ingress",
+  "scheduler": "10.20.1.10:7443",
+  "scheduler_ca": "/etc/protostrap/scheduler-ca.pem",
+  "scheduler_ca_key": "scheduler/ca.pem",
+  "auto_scaling_group": "shop-ingress-a",
+  "launch_hook": "protostrap-launch",
+  "terminate_hook": "protostrap-terminate",
+  "deploy_bucket": "shop-deploy",
+  "network": {
+    "vpc": "10.20.0.0/16",
+    "resolver": "10.20.0.2",
+    "managed": ["10.20.2.0/24"]
+  },
+  "ingress": {
+    "interface": "ens5",
+    "elastic_ip_allocation": "eipalloc-0123456789abcdef0",
+    "route_tables": ["rtb-0aaaaaaaaaaaaaaa1", "rtb-0aaaaaaaaaaaaaaa2"]
+  }
+}

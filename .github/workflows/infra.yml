@@ -1,0 +1,142 @@
+# The infra workflow (docs/protostrap.md#infra-workflow) runs Terraform for one account's
+# platform root, such as sample/infra/dev, with the Infra role. It runs in the account's
+# infra GitHub environment, <environment>-infra, which bootstrap created with everything
+# the root needs: AWS_ROLE_ARN, the state bucket, and the root's inputs as TF_VAR_*
+# variables. Required reviewers on that environment gate every change.
+#
+# After a successful apply it records the hash of the spec's infra projection, as
+# infra/<environment>.sha256 in the deploy bucket, so a deploy only waits for infra when
+# the projection changes.
+name: infra
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: The environment, such as dev. The job runs in <environment>-infra.
+        type: string
+        required: true
+      directory:
+        description: The account's Terraform root, such as infra/dev.
+        type: string
+        required: true
+      spec:
+        description: The application's protostrap.yaml.
+        type: string
+        default: protostrap.yaml
+      action:
+        description: plan, apply or destroy.
+        type: string
+        default: plan
+      terraform-version:
+        type: string
+        default: 1.10.5
+      protostrap-repository:
+        type: string
+        default: duncan-G/protostrap
+      protostrap-ref:
+        description: The ProtoStrap version to build the CLI from. Empty uses this repository, which is ProtoStrap itself.
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: infra-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  terraform:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}-infra
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      TF_IN_AUTOMATION: "1"
+      TF_INPUT: "0"
+    steps:
+      - uses: actions/checkout@v5
+
+      - if: inputs.protostrap-ref != ''
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ inputs.protostrap-repository }}
+          ref: ${{ inputs.protostrap-ref }}
+          path: .protostrap
+
+      - uses: ./.github/actions/protostrap
+        if: inputs.protostrap-ref == ''
+
+      - uses: ./.protostrap/.github/actions/protostrap
+        if: inputs.protostrap-ref != ''
+        with:
+          source: .protostrap
+
+      - name: Check the spec
+        run: protostrap check --spec "${{ inputs.spec }}"
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ inputs.terraform-version }}
+          terraform_wrapper: false
+
+      # The root's inputs are the environment's TF_VAR_* variables.
+      - name: Inputs
+        env:
+          VARS: ${{ toJSON(vars) }}
+        run: |
+          set -euo pipefail
+          jq -r 'to_entries[] | select(.key | startswith("TF_VAR_")) | "\(.key)<<PROTOSTRAP_EOF\n\(.value)\nPROTOSTRAP_EOF"' <<<"$VARS" >> "$GITHUB_ENV"
+          jq -r 'keys[] | select(startswith("TF_VAR_"))' <<<"$VARS"
+
+      - name: Init
+        working-directory: ${{ inputs.directory }}
+        run: terraform init -backend-config="bucket=${{ vars.PROTOSTRAP_STATE_BUCKET }}" -backend-config="region=${{ vars.AWS_REGION }}"
+
+      - name: Validate
+        working-directory: ${{ inputs.directory }}
+        run: terraform validate
+
+      - name: Plan
+        if: inputs.action != 'destroy'
+        working-directory: ${{ inputs.directory }}
+        run: terraform plan -out=tfplan
+
+      - name: Apply
+        if: inputs.action == 'apply'
+        working-directory: ${{ inputs.directory }}
+        run: terraform apply tfplan
+
+      - name: Record what was applied
+        if: inputs.action == 'apply'
+        run: |
+          set -euo pipefail
+          protostrap plan --spec "${{ inputs.spec }}" --json | jq -r .infra_hash |
+            aws s3 cp - "s3://${{ vars.PROTOSTRAP_DEPLOY_BUCKET }}/infra/${{ inputs.environment }}.sha256"
+
+      - name: Outputs
+        if: inputs.action == 'apply'
+        working-directory: ${{ inputs.directory }}
+        run: terraform output
+
+      - name: Destroy
+        if: inputs.action == 'destroy'
+        working-directory: ${{ inputs.directory }}
+        # Terraform never deletes a stateful component's volume (prevent_destroy), so the
+        # destroy forgets each one first. The volumes stay in the account, with their data,
+        # until someone deletes them by hand.
+        run: |
+          set -euo pipefail
+          { terraform state list | grep -E '(^|\.)aws_ebs_volume\.stateful\[' || true; } | while read -r volume; do
+            id=$(terraform state show -no-color "$volume" | awk '$1 == "id" { gsub(/"/, "", $3); print $3 }')
+            echo "::warning::Keeping $id, $volume, with its data. Delete it by hand once it isn't needed."
+            terraform state rm "$volume"
+          done
+          terraform destroy -auto-approve

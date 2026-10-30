@@ -1,0 +1,13 @@
+# This is the protostrap binary `go build ./cmd/protostrap` writes at the repository root.
+/protostrap
+# These are the protostrap binary the deploy workflow copies into the edge's and telemetry's
+# build contexts.
+/edge/protostrap
+/telemetry/protostrap
+# These are Terraform's working directories and local states.
+.terraform/
+*.tfstate
+*.tfstate.*
+# These are ProtoStrap.Hosting's build outputs.
+/hosting/**/bin/
+/hosting/**/obj/

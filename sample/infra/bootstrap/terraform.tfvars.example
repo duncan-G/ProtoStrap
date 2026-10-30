@@ -1,0 +1,8 @@
+# Copy this file to terraform.tfvars (gitignored) and fill in the values.
+github_repository     = "owner/repo"
+region                = "us-east-1"
+cloudflare_account_id = "0123456789abcdef0123456789abcdef"
+cloudflare_zone       = "example.com"
+hosts                 = { sample = "sample-dev.example.com" }
+# alert_emails        = ["you@example.com"]
+# cloudflare_api_token = "..."   # Or set it with `gh secret set CLOUDFLARE_API_TOKEN --env dev-infra`.

@@ -1,0 +1,11 @@
+# This timer mounts volumes attached after boot, such as a new stateful component's, within
+# a minute.
+[Unit]
+Description=Mount newly attached ProtoStrap volumes
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=1min
+
+[Install]
+WantedBy=timers.target

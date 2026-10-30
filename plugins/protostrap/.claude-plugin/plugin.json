@@ -1,0 +1,9 @@
+{
+  "name": "protostrap",
+  "description": "Skills for applications deployed with ProtoStrap: set up and upgrade the repository, write protostrap.yaml or generate it from an Aspire AppHost, keep the application contract in code, send telemetry, handle secrets and email, ship a change, and find out why a deployment behaves as it does.",
+  "author": {
+    "name": "duncan-G"
+  },
+  "homepage": "https://github.com/duncan-G/protostrap",
+  "repository": "https://github.com/duncan-G/protostrap"
+}

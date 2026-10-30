@@ -1,0 +1,12 @@
+# This unit runs the reporter on data-1, which writes a daily report on what happened and
+# what to change (docs/protostrap.md#reporter). The reporter is read-only; if it fails,
+# nothing else notices.
+[Unit]
+Description=ProtoStrap reporter
+After=network-online.target protostrap-install.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/protostrap report --config /etc/protostrap/scheduler.json
+TimeoutStartSec=30min

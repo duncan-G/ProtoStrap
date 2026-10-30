@@ -1,0 +1,12 @@
+<Project>
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <!-- Aspire's pipeline, compute environment, probe and container file APIs are marked
+         experimental in 13.x. ProtoStrap.Hosting pins the Aspire version it is tested against. -->
+    <NoWarn>$(NoWarn);ASPIREPIPELINES001;ASPIREPIPELINES004;ASPIRECOMPUTE002;ASPIREPROBES001</NoWarn>
+  </PropertyGroup>
+</Project>

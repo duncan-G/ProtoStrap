@@ -1,0 +1,14 @@
+{
+  "name": "protostrap",
+  "description": "ProtoStrap's skills for the applications it deploys, at this repository's version.",
+  "owner": {
+    "name": "duncan-G"
+  },
+  "plugins": [
+    {
+      "name": "protostrap",
+      "description": "Skills for applications deployed with ProtoStrap, at this repository's version.",
+      "source": "./plugins/protostrap"
+    }
+  ]
+}

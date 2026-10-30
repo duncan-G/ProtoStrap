@@ -1,0 +1,94 @@
+# This file is a local smoke run of the sample services, without AWS. There is no secret
+# (connection strings come from the environment) and no queue (the jobs worker idles, and
+# POST /api/jobs answers 503). Building the images downloads base images and packages:
+#
+#   docker compose -f sample/compose.yaml up --build
+#
+# Then try these from the repository root:
+#   curl --http2-prior-knowledge localhost:8080/api/hello      # The api speaks only h2c.
+#   curl localhost:3000/web/hello                              # web calls the api.
+#   curl localhost:8000/py/count                               # py counts in Redis.
+#   curl -H 'Host: web' localhost:3000/healthz                 # Readiness wants the component's name.
+#   go run ./sample/load http -url 'http://localhost:8000/py/burn?ms=20' -rps 30 -duration 1m
+name: protostrap-sample
+
+x-protostrap: &protostrap
+  PROTOSTRAP_APP: sample
+  PROTOSTRAP_RELEASE: local
+  DRAIN_SECONDS: "5"
+
+x-postgres: &postgres "Host=postgres;Port=5432;Username=postgres;Database=postgres"
+
+services:
+  postgres:
+    image: postgres:17.6
+    environment:
+      POSTGRES_HOST_AUTH_METHOD: trust
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres"]
+      interval: 2s
+      retries: 30
+
+  redis:
+    image: redis:7.4
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      retries: 30
+
+  migrate:
+    build: { context: services/dotnet, dockerfile: Migrate/Dockerfile }
+    environment:
+      <<: *protostrap
+      PROTOSTRAP_COMPONENT: migrate
+      ConnectionStrings__postgres: *postgres
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  api:
+    build: { context: services/dotnet, dockerfile: Api/Dockerfile }
+    environment:
+      <<: *protostrap
+      PROTOSTRAP_COMPONENT: api
+      JOBS_BUDGET: "100000"
+      ConnectionStrings__postgres: *postgres
+      ConnectionStrings__redis: redis:6379
+    ports: ["8080:8080", "9090:9090"]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+    stop_grace_period: 30s
+
+  jobs:
+    build: { context: services/dotnet, dockerfile: Worker/Dockerfile }
+    environment:
+      <<: *protostrap
+      PROTOSTRAP_COMPONENT: jobs
+      JOBS_CONCURRENCY: "2"
+      ConnectionStrings__postgres: *postgres
+      ConnectionStrings__redis: redis:6379
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+    stop_grace_period: 60s
+
+  web:
+    build: services/web
+    environment:
+      <<: *protostrap
+      PROTOSTRAP_COMPONENT: web
+      API_URL: http://api:8080
+    ports: ["3000:3000", "9464:9464"]
+    depends_on: [api]
+    stop_grace_period: 20s
+
+  py:
+    build: services/py
+    environment:
+      <<: *protostrap
+      PROTOSTRAP_COMPONENT: py
+      ConnectionStrings__redis: redis:6379
+    ports: ["8000:8000"]
+    depends_on:
+      redis: { condition: service_healthy }
+    stop_grace_period: 20s

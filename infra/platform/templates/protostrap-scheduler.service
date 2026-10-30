@@ -1,0 +1,16 @@
+# This unit runs the scheduler, on data-1 only (docs/protostrap.md#scheduler). Exactly one
+# runs.
+[Unit]
+Description=ProtoStrap scheduler
+After=docker.service network-online.target protostrap-install.service
+Requires=docker.service protostrap-install.service
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/protostrap scheduler --config /etc/protostrap/scheduler.json
+Restart=always
+RestartSec=2
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,21 @@
+# This unit runs the ProtoStrap agent on every VM (docs/protostrap.md#agent).
+[Unit]
+Description=ProtoStrap agent
+After=docker.service network-online.target protostrap-install.service
+Requires=docker.service protostrap-install.service
+Wants=network-online.target
+
+[Service]
+Type=notify
+NotifyAccess=main
+ExecStart=/usr/local/bin/protostrap agent --config /etc/protostrap/agent.json
+# The agent pets the watchdog every 5 seconds; systemd restarts it if it stops answering.
+WatchdogSec=60
+Restart=always
+RestartSec=2
+# Stopping the agent never stops replicas: Docker keeps them running.
+KillMode=process
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

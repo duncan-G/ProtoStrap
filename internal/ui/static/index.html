@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>ProtoStrap operator</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/app.css">
+<script src="/app.js" defer></script>
+</head>
+<body>
+<header class="top">
+  <div class="bar">
+    <div class="brand">
+      <img class="logo" src="/favicon.svg" width="22" height="22" alt="">
+      <span class="product">ProtoStrap</span>
+      <span class="sep" aria-hidden="true">/</span>
+      <span class="app" id="app">operator</span>
+      <span class="pill" id="env" hidden></span>
+    </div>
+    <div class="meta">
+      <span class="pill" id="role" hidden></span>
+      <span id="release"></span>
+      <span class="live" id="live" role="status"><span class="dot" aria-hidden="true"></span><span id="live-text">Connecting…</span></span>
+      <button class="icon-button" id="theme" type="button" aria-label="Switch between light and dark">Dark</button>
+    </div>
+  </div>
+  <nav class="tabs" aria-label="Views">
+    <a href="#overview" data-view="overview">Overview</a>
+    <a href="#components" data-view="components">Components</a>
+    <a href="#vms" data-view="vms">VMs</a>
+    <a href="#replicas" data-view="replicas">Replicas</a>
+    <a href="#logs" data-view="logs">Logs</a>
+    <a href="#reports" data-view="reports">Reports</a>
+  </nav>
+</header>
+<main id="view" tabindex="-1">
+  <noscript><div class="card empty"><strong>The operator UI needs JavaScript.</strong><code>protostrap status</code> on data-1 shows the same.</div></noscript>
+</main>
+<div class="tip" id="tip" role="tooltip" hidden></div>
+</body>
+</html>
