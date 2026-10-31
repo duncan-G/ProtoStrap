@@ -40,7 +40,7 @@ changed on disk: fix the AppHost and regenerate before committing.
 
 ```csharp
 builder.AddProtoStrapEnvironment("protostrap", app: "shop")
-    .WithVersion("0.1.0")                   // = the workflows' @v0.1.0 and the roots' ?ref=v0.1.0
+    .WithVersion("0.1.1")                   // = the workflows' @v0.1.1 and the roots' ?ref=v0.1.1
     .WithIngressPool(vm: "c8g.medium")
     .WithGeneralPool(vm: ["m7g.large", "m6g.large", "m8g.large", "m7gd.large"], min: 1, max: 4)
     .WithComputePool(vm: ["c7g.large", "c6g.large", "c8g.large", "c7gd.large"], min: 0, max: 2)
@@ -50,6 +50,9 @@ builder.AddProtoStrapEnvironment("protostrap", app: "shop")
 `WithHost("web", "shop.example.com", local: "web.localhost")` names a host: routes refer to
 it as `web/`, each account's Terraform root may give `web` another hostname, and under
 `aspire run` every resource gets `HOST_WEB` and `ORIGIN_WEB` for the local one. `WithEdge(cpu:, memory:)`, `WithSpecPath(...)` and `WithCheck(...)` are optional.
+`WithDevSecret()` has `aspire run` take every parameter's value from dev's secret,
+`shop/dev`, by the key the component reads in an account, after an AWS SSO sign-in with the
+`developer` profile; it stops, naming the keys, if one is missing (docs/secrets.md#dev).
 
 ## Every compute resource says its kind
 
@@ -232,4 +235,4 @@ image then changes the build without a commit. Pin it before production.
 Until the package is on NuGet, the AppHost references its project from a ProtoStrap checkout
 at the same version, through an MSBuild property (`.protostrap/`, where CI checks it out, or
 `../ProtoStrap`), with `IsAspireProjectResource="false"`. The package pins an Aspire version
-(13.6.2 for 0.1.0): use the same `Aspire.AppHost.Sdk`.
+(13.6.2 for 0.1.1): use the same `Aspire.AppHost.Sdk`.

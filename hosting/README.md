@@ -70,6 +70,7 @@ added to the model in run mode, so `aspire run` is unchanged.
 | --------------------------------------------- | ----------------------------------------------------------------------- |
 | `AddProtoStrapEnvironment(name, app)`         | `app`, and with `WithVersion`, `WithHost`, `With*Pool` and `WithEdge`, the rest of the spec's top |
 | `.WithHost(name, hostname, local)`            | An entry in `hosts`, which routes name as `name/`; under `aspire run`, every resource's `HOST_<NAME>` and `ORIGIN_<NAME>` for the local hostname |
+| `.WithDevSecret(profile)`                     | Nothing in the spec; under `aspire run`, every parameter a component takes gets its value from dev's secret, `<app>/dev`, by the key it reads in an account, after an AWS SSO sign-in ([docs/secrets.md](../docs/secrets.md#dev)) |
 | `PublishAsProtoStrapService(...)`             | `kind: service`: `Pool`, `Request`, `Routes`/`Route`, `Ready`, `Metrics`, `Stop`, `Scale`, `SecretFiles` |
 | `PublishAsProtoStrapWorker(...)`              | `kind: worker`: `Pool`, `Request`, `Metrics`, `Stop`, `Scale`, `SecretFiles` |
 | `PublishAsProtoStrapStateful(...)`            | `kind: stateful`: `Vm`, `Request`, `Volume`, `Backup`, `Command`, `Metrics`, `Stop`, `SecretFiles` |

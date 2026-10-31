@@ -42,7 +42,8 @@ The design is `docs/secrets.md` at the spec's `protostrap:` version.
 ## Adding a secret
 
 1. **The code** reads the key by its unprefixed name from configuration
-   (protostrap-contract skill), and locally from an environment variable or user secrets.
+   (protostrap-contract skill). Locally it gets an environment variable: with
+   `WithDevSecret()`, the AppHost takes its value from dev's secret by the same key.
 2. **The spec** lists it in the component's `secrets`, without prefix:
    `secrets: [ConnectionStrings__postgres, Stripe__ApiKey]`. With an Aspire AppHost, a
    `builder.AddParameter("stripe-key", secret: true)` passed to the component does this
@@ -62,6 +63,8 @@ The design is `docs/secrets.md` at the spec's `protostrap:` version.
    `shop/prod`, and Developers set it with their own sign-in. They can't read `shop/prod`:
    the platform tags it. No Terraform makes `shop/dev`, so it is made once with
    `aws secretsmanager create-secret --name shop/dev` before `scripts/set-secret.sh` fills it.
+   With `WithDevSecret()`, `aspire run` stops until dev's secret has the new key too, so add
+   it there in the same change (docs/secrets.md#dev).
 
 ## Images that can't read Secrets Manager
 

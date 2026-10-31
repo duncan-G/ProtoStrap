@@ -70,8 +70,9 @@ A service reads the secret when it starts, with its component's role, which the 
 finds on its own. It keeps the keys that start with `SECRET_PREFIX` and the `Shared_`
 ones, drops the prefixes, and lets its own keys win. The sample's
 [.NET](../sample/services/dotnet/Shared/ProtoStrapHosting.cs) and
-[Python](../sample/services/py/main.py) services each do this in about 20 lines. A
-local run sets the same keys, without prefixes, as environment variables.
+[Python](../sample/services/py/main.py) services each do this in about 20 lines. Under
+`aspire run`, the AppHost sets the same keys, without prefixes, as environment variables,
+with their values from dev's secret (see [Dev](#dev)).
 
 A service reads its keys only when it starts. When they change, ProtoStrap replaces its
 replicas, a quarter at a time, as a release does. Each new replica reads everything again,
@@ -98,6 +99,32 @@ For them, the agent reads the keys and writes each one listed in `secrets` to a 
 - **They come back after a reboot.** A reboot empties tmpfs, and Docker can't start a
   container whose files are gone, so the agent writes them again and starts it.
 
+
+## Dev
+
+Dev is the local run, `aspire run`, and its values live in dev's secret, `<app>/dev`, beside
+prod's in the application's account and with the same keys. With `WithDevSecret()` on the
+ProtoStrap environment (ProtoStrap.Hosting), the AppHost reads it before it starts anything,
+and gives every parameter a component takes the value of the key the component reads in an
+account: its prefix and the variable's name, such as `Keycloak_KC_BOOTSTRAP_ADMIN_CLIENT_SECRET`,
+or the `Shared_` one. Generated parameters, PostgreSQL's and Redis's passwords included, take
+it too rather than making one. Components get their values as environment variables, as they
+always do under `aspire run`: only the AppHost reads the secret.
+
+- **Signing in.** The AppHost reads it with the AWS CLI v2 and an SSO profile, `developer`
+  unless `WithDevSecret` names another, made once with `aws configure sso --profile developer`
+  and the Developer permission set. When the profile's session is missing or expired, the
+  AppHost runs `aws sso login` first. The region is `AWS_REGION`, or the profile's.
+- **A missing key stops the run,** and the AppHost names each one. A parameter two components
+  take must have the same value under both keys.
+- **Connection strings stay Aspire's,** which point at the local PostgreSQL and the rest. Dev's
+  secret needs none, and any it has go unused.
+- **Developers make it once,** with `aws secretsmanager create-secret --name <app>/dev`, and
+  fill it with `scripts/set-secret.sh` or the application's own script. Nothing deployed reads
+  it, and no workflow touches it.
+
+Without `WithDevSecret`, parameters take their values as Aspire gives them: from user secrets,
+or generated.
 
 ## Changing a value
 

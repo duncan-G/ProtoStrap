@@ -1,6 +1,8 @@
 using System.Globalization;
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.Pipelines;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using ProtoStrap.Hosting;
 using ProtoStrap.Hosting.Spec;
 
@@ -72,6 +74,32 @@ public static class ProtoStrapEnvironmentExtensions
             if (environment.LocalEdge is null)
                 LocalEdge.Add(builder.ApplicationBuilder, environment);
         }
+        return builder;
+    }
+
+    /// <summary>
+    /// WithDevSecret has `aspire run` give every parameter a component takes its value from dev's
+    /// secret, &lt;app&gt;/dev, by the key the component reads in an account: its prefix and the
+    /// variable's name, or the Shared_ one (docs/secrets.md#dev). Generated parameters take it too,
+    /// rather than making one. The AppHost reads the secret with the AWS CLI and an SSO profile with
+    /// the Developer permission set, signing in with `aws sso login` when the profile's session is
+    /// missing or expired, and stops, naming each key, if one is missing. Components get their values
+    /// as they always do under `aspire run`, and connection strings stay Aspire's local ones. In
+    /// publish mode it does nothing.
+    /// </summary>
+    /// <param name="builder">It is the environment.</param>
+    /// <param name="profile">It is the AWS profile the AppHost signs in with, developer by default.</param>
+    public static IResourceBuilder<ProtoStrapEnvironmentResource> WithDevSecret(
+        this IResourceBuilder<ProtoStrapEnvironmentResource> builder, string profile = DevSecret.DefaultProfile)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(profile);
+        if (builder.ApplicationBuilder.ExecutionContext.IsPublishMode)
+            return builder;
+        var configuration = builder.ApplicationBuilder.Configuration;
+        var secret = new DevSecret { App = builder.Resource.App, Profile = profile, Variable = name => configuration[name] };
+        builder.ApplicationBuilder.Eventing.Subscribe<BeforeStartEvent>((e, cancellationToken) =>
+            secret.ApplyAsync(e.Model.Resources, e.Services.GetRequiredService<DistributedApplicationExecutionContext>(), configuration,
+                e.Services.GetRequiredService<ILoggerFactory>().CreateLogger("ProtoStrap.DevSecret"), cancellationToken));
         return builder;
     }
 

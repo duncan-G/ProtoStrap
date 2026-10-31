@@ -1054,7 +1054,7 @@ internal sealed partial class SpecGenerator(
     /// PROTOFAST_DATABASENAME. Each is a connection detail, so it goes to the secret even when its
     /// value holds nothing secret: moving the database to a managed service changes them all.
     /// </summary>
-    private static HashSet<string> ConnectionProperties(Dictionary<string, object> values)
+    internal static HashSet<string> ConnectionProperties(Dictionary<string, object> values)
     {
         var names = new HashSet<string>(StringComparer.Ordinal);
         foreach (var (key, value) in values)

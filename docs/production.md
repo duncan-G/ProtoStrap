@@ -97,9 +97,9 @@ match:
 
 | Where                                     | Form                                                             |
 | ----------------------------------------- | ---------------------------------------------------------------- |
-| The spec                                  | `protostrap: 0.1.0`                                              |
-| The application's workflows               | `uses: duncan-G/protostrap/.github/workflows/deploy.yml@v0.1.0`, with `protostrap-ref: v0.1.0` |
-| The application's Terraform roots         | `source = "github.com/duncan-G/protostrap//infra/platform?ref=v0.1.0"` |
+| The spec                                  | `protostrap: 0.1.1`                                              |
+| The application's workflows               | `uses: duncan-G/protostrap/.github/workflows/deploy.yml@v0.1.1`, with `protostrap-ref: v0.1.1` |
+| The application's Terraform roots         | `source = "github.com/duncan-G/protostrap//infra/platform?ref=v0.1.1"` |
 
 
 ## 4. Accounts and people
@@ -109,7 +109,8 @@ match:
   and dev's secret. Dev is the local run, so it has no account: its secret, `<app>/dev`,
   named like every environment's, sits beside prod's, `<app>/prod`. No Terraform makes it:
   Developers create it once (`aws secretsmanager create-secret --name <app>/dev`), fill it
-  with `scripts/set-secret.sh` and read it with their sign-in. Nothing is deployed for dev,
+  with `scripts/set-secret.sh`, and their AppHost reads it with their sign-in
+  ([Dev](secrets.md#dev)). Nothing is deployed for dev,
   and no workflow touches its secret. ProtoStrap names its resources on the assumption of
   one application per account, so a second application gets an account of its own, as
   does a second deployed environment if the application has one. Use one region for all
@@ -181,25 +182,25 @@ jobs:
 
   plan:
     needs: approve
-    uses: duncan-G/protostrap/.github/workflows/plan.yml@v0.1.0
-    with: { environment: prod, protostrap-ref: v0.1.0 }
+    uses: duncan-G/protostrap/.github/workflows/plan.yml@v0.1.1
+    with: { environment: prod, protostrap-ref: v0.1.1 }
 
   infra:
     needs: plan
     if: needs.plan.outputs.infra-changed == 'true'
-    uses: duncan-G/protostrap/.github/workflows/infra.yml@v0.1.0
-    with: { environment: prod, directory: infra/prod, action: apply, protostrap-ref: v0.1.0 }
+    uses: duncan-G/protostrap/.github/workflows/infra.yml@v0.1.1
+    with: { environment: prod, directory: infra/prod, action: apply, protostrap-ref: v0.1.1 }
     secrets: inherit
 
   deploy:
     needs: [plan, infra]
     if: always() && needs.plan.result == 'success' && (needs.infra.result == 'success' || needs.infra.result == 'skipped')
-    uses: duncan-G/protostrap/.github/workflows/deploy.yml@v0.1.0
+    uses: duncan-G/protostrap/.github/workflows/deploy.yml@v0.1.1
     with:
       environment: prod
       version: ${{ needs.plan.outputs.version }}
       builds: ${{ needs.plan.outputs.builds }}
-      protostrap-ref: v0.1.0
+      protostrap-ref: v0.1.1
 ```
 
 The plan and deploy jobs run in the `prod` GitHub environment, and infra in `prod-infra`.
@@ -234,7 +235,7 @@ settings. Leave `protect_data_vms` and `force_destroy` at their defaults, true a
 
 ```hcl
 module "protostrap" {
-  source = "github.com/duncan-G/protostrap//infra/platform?ref=v0.1.0"
+  source = "github.com/duncan-G/protostrap//infra/platform?ref=v0.1.1"
 
   spec                  = file("${path.module}/../../protostrap.yaml")
   environment           = "prod"

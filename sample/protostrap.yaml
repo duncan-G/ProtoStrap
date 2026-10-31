@@ -7,7 +7,7 @@
 # Terraform config gives it one (sample/infra/test/main.tf). Routes are paths, which match
 # every host.
 app: sample
-protostrap: 0.1.0
+protostrap: 0.1.1
 hosts:
   sample: sample.example.com
 

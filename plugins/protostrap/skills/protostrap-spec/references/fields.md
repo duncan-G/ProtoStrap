@@ -18,7 +18,7 @@ The spec's fields as `internal/spec` reads them. A key not listed here is an err
 
 ```yaml
 app: shop                      # up to 30 characters; names the secret, shop/<environment>, and the log groups
-protostrap: 0.1.0              # the ProtoStrap version; must match the workflows' @v and the roots' ?ref=
+protostrap: 0.1.1              # the ProtoStrap version; must match the workflows' @v and the roots' ?ref=
 hosts:                         # optional; each host's name, which routes use (shop/api/), and hostname
   shop: shop.example.com       # an account's Terraform root may give every name another hostname
 pools: { ... }
