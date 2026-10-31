@@ -54,13 +54,21 @@ func TestAuthorizedRoutesAskTheAuthorizerFirst(t *testing.T) {
 	authz := jsonOf(filters[2])
 	for _, want := range []string{
 		`"disabled":true`, `"uri":"http://auth:8080"`, `"cluster":"auth"`, `"path_prefix":"/auth/check"`,
-		`"allowed_headers":{"patterns":[{"exact":"cookie","ignore_case":true}]}`,
 		`"allowed_upstream_headers":{"patterns":[{"exact":"x-identity","ignore_case":true}]}`,
 		`"failure_mode_allow":false`, `"status_on_error":{"code":"ServiceUnavailable"}`,
 	} {
 		if !strings.Contains(authz, want) {
 			t.Errorf("api's ext_authz lacks %s:\n%s", want, authz)
 		}
+	}
+	// The headers sent to the authorizer are the filter's own allowed_headers: the http_service's
+	// authorization_request.allowed_headers is deprecated, and Envoy warns about it on every load.
+	typed := filters[2]["typed_config"].(map[string]any)
+	if got := jsonOf(typed["allowed_headers"]); got != `{"patterns":[{"exact":"cookie","ignore_case":true}]}` {
+		t.Errorf("api's ext_authz sends the authorizer %s", got)
+	}
+	if strings.Contains(authz, "authorization_request") {
+		t.Errorf("api's ext_authz uses the deprecated authorization_request:\n%s", authz)
 	}
 	// A path of / asks for the request's own path, with no prefix.
 	if web := jsonOf(filters[3]); strings.Contains(web, "path_prefix") {
@@ -78,6 +86,18 @@ func TestAuthorizedRoutesAskTheAuthorizerFirst(t *testing.T) {
 	}
 	if auth := jsonOf(routes["admin.example.com/auth/"]["typed_per_filter_config"]); strings.Contains(auth, "ext_authz") || strings.Contains(auth, "header_mutation") {
 		t.Errorf("auth's own routes are authorized:\n%s", auth)
+	}
+}
+
+// An authorizer that's forwarded no headers is sent only those Envoy always sends an HTTP
+// authorizer, Authorization among them: no allowed_headers at all, since an empty list is no
+// list to Envoy.
+func TestAnAuthorizerForwardedNothingGetsEnvoysDefaults(t *testing.T) {
+	s := authorized()
+	s[0].Authorize.Forward = nil
+	filters, _ := listenerOf(t, Routing{Services: s, Hosts: map[string]string{"admin": "admin.example.com"}})
+	if authz := jsonOf(filters[2]); strings.Contains(authz, "allowed_headers\"") || strings.Contains(authz, "authorization_request") {
+		t.Errorf("api's ext_authz names headers to send:\n%s", authz)
 	}
 }
 
@@ -105,7 +125,13 @@ func TestEnvoyAcceptsTheConfig(t *testing.T) {
 		t.Skip("set PROTOSTRAP_ENVOY_TEST=1 to validate with Envoy in Docker")
 	}
 	all := append(authorized(), services()[2]) // py, with a rate limit.
-	files := Files(Routing{Services: all, Hosts: map[string]string{"admin": "admin.example.com"}})
+	envoyValidates(t, Files(Routing{Services: all, Hosts: map[string]string{"admin": "admin.example.com"}}))
+}
+
+// envoyValidates has the edge's Envoy validate a listener and clusters Files rendered, as
+// static resources: validate mode doesn't read the files a bootstrap points at.
+func envoyValidates(t *testing.T, files map[string]string) {
+	t.Helper()
 	var lds, cds struct {
 		Resources []map[string]any `json:"resources"`
 	}
@@ -129,5 +155,9 @@ func TestEnvoyAcceptsTheConfig(t *testing.T) {
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("envoy refused the config: %v\n%s", err, out)
+	}
+	// A deprecated field is accepted with a warning, until an Envoy upgrade refuses it.
+	if strings.Contains(string(out), "Deprecated field") {
+		t.Errorf("envoy accepted the config with a deprecated field:\n%s", out)
 	}
 }

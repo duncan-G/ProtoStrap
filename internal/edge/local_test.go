@@ -93,14 +93,21 @@ func TestRoutingIsJSON(t *testing.T) {
 	}
 }
 
-// PROTOSTRAP_ENVOY_TEST=1 has Envoy validate the local edge's bootstrap with its listener and
-// clusters.
+// PROTOSTRAP_ENVOY_TEST=1 has Envoy validate the local edge's bootstrap, and its listener and
+// clusters, which validate mode doesn't read through the bootstrap.
 func TestEnvoyAcceptsTheLocalEdge(t *testing.T) {
 	if os.Getenv("PROTOSTRAP_ENVOY_TEST") != "1" {
 		t.Skip("set PROTOSTRAP_ENVOY_TEST=1 to validate with Envoy in Docker")
 	}
 	dir := t.TempDir()
-	if err := WriteLocal(dir, local()); err != nil {
+	// It logs each request, and api and web are authorized, one with a header forwarded.
+	r := local()
+	r.Local = true
+	r.Services = append(r.Services, Service{Name: "auth", Port: 8080, Ready: "/healthz", Routes: []Route{{Host: "admin", Path: "/auth/"}},
+		Address: "host.docker.internal:51300"})
+	r.Services[0].Authorize = &Authorize{By: "auth", Path: "/auth/check", Headers: []string{"x-identity"}, Forward: []string{"cookie"}}
+	r.Services[2].Authorize = &Authorize{By: "auth", Path: "/auth/check", Headers: []string{"x-identity"}}
+	if err := WriteLocal(dir, r); err != nil {
 		t.Fatal(err)
 	}
 	var files []string
@@ -117,6 +124,7 @@ func TestEnvoyAcceptsTheLocalEdge(t *testing.T) {
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("envoy refused the local edge: %v\n%s", err, out)
 	}
+	envoyValidates(t, Files(r))
 }
 
 // WriteLocal writes what the local edge's Envoy reads: its bootstrap, which points at the
@@ -158,5 +166,28 @@ func TestALocalGRPCCheckDoesntNameTheService(t *testing.T) {
 				t.Errorf("api's local check:\n%s", got)
 			}
 		}
+	}
+}
+
+// The local edge logs each request it routes to its console, the AppHost's dashboard, so a
+// developer sees what the edge did with it: the host and path (without the query, which may
+// hold a sign-in's code), where it went, and Envoy's response flags, such as UAEX for a request
+// the authorizer refused or NR for one no route matched. An account's edge logs nothing.
+func TestTheLocalEdgeLogsEachRequest(t *testing.T) {
+	r := local()
+	r.Local = true
+	got := jsonOf(decode(t, Files(r)["edge/lds.json"]))
+	for _, want := range []string{
+		`"access_log":[{"name":"envoy.access_loggers.stdout"`,
+		`"@type":"type.googleapis.com/envoy.extensions.access_loggers.stream.v3.StdoutAccessLog"`,
+		`%REQ(:METHOD)% %REQ(:AUTHORITY)%%PATH(NQ:ORIG_OR_PATH)%`,
+		`%RESPONSE_CODE% %RESPONSE_FLAGS%`, `%UPSTREAM_CLUSTER%`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the local edge's listener lacks %s:\n%s", want, got)
+		}
+	}
+	if lds := Files(local())["edge/lds.json"]; strings.Contains(lds, "access_log") {
+		t.Errorf("an account's edge logs each request")
 	}
 }

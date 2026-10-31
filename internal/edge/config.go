@@ -201,22 +201,26 @@ func authzFilters(services []Service) []any {
 			}
 		}
 		httpService := obj{
-			"server_uri": obj{"uri": fmt.Sprintf("http://%s:%d", a.By, port), "cluster": a.By, "timeout": "2s"},
-			// Authorization is sent without asking; these are the others.
-			"authorization_request":  obj{"allowed_headers": patterns(a.Forward)},
+			"server_uri":             obj{"uri": fmt.Sprintf("http://%s:%d", a.By, port), "cluster": a.By, "timeout": "2s"},
 			"authorization_response": obj{"allowed_upstream_headers": patterns(a.Headers)},
 		}
 		if p := strings.TrimSuffix(a.Path, "/"); p != "" {
 			httpService["path_prefix"] = p
 		}
-		filters = append(filters, obj{"name": authzFilter(s.Name), "disabled": true, "typed_config": obj{
+		authz := obj{
 			"@type":                 "type.googleapis.com/envoy.extensions.filters.http.ext_authz.v3.ExtAuthz",
 			"transport_api_version": "V3",
 			"http_service":          httpService,
 			// A request the authorizer can't answer for isn't let through.
 			"failure_mode_allow": false,
 			"status_on_error":    obj{"code": "ServiceUnavailable"},
-		}})
+		}
+		// Envoy sends an HTTP authorizer Authorization, Host, Method, Path and Content-Length
+		// without asking; these are the others. Unset, it sends no others.
+		if len(a.Forward) > 0 {
+			authz["allowed_headers"] = patterns(a.Forward)
+		}
+		filters = append(filters, obj{"name": authzFilter(s.Name), "disabled": true, "typed_config": authz})
 	}
 	return filters
 }
@@ -253,35 +257,49 @@ func listener(services []Service, cfg Routing) obj {
 	}
 	vhosts = append(vhosts, virtualHost("*", everyHost))
 
+	hcm := obj{
+		"@type":       "type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager",
+		"stat_prefix": "edge",
+		// cloudflared is the only client, so the address Cloudflare passes is trusted.
+		"use_remote_address":           false,
+		"common_http_protocol_options": obj{"idle_timeout": "300s"},
+		"route_config":                 obj{"name": "routes", "virtual_hosts": vhosts},
+		"http_filters": slices.Concat(
+			// A route's rate limit comes first, so it protects the authorizer too.
+			[]any{obj{"name": "envoy.filters.http.local_ratelimit", "typed_config": obj{
+				"@type":       "type.googleapis.com/envoy.extensions.filters.http.local_ratelimit.v3.LocalRateLimit",
+				"stat_prefix": "edge_rate",
+			}}},
+			authzFilters(services),
+			[]any{
+				obj{"name": "envoy.filters.http.grpc_web", "typed_config": obj{"@type": "type.googleapis.com/envoy.extensions.filters.http.grpc_web.v3.GrpcWeb"}},
+				obj{"name": "envoy.filters.http.router", "typed_config": obj{"@type": "type.googleapis.com/envoy.extensions.filters.http.router.v3.Router"}},
+			},
+		),
+	}
+	if cfg.Local {
+		hcm["access_log"] = []any{localAccessLog}
+	}
 	return obj{"resources": []any{obj{
 		"@type":   "type.googleapis.com/envoy.config.listener.v3.Listener",
 		"name":    "edge",
 		"address": obj{"socket_address": obj{"address": address, "port_value": port}},
 		"filter_chains": []any{obj{"filters": []any{obj{
-			"name": "envoy.filters.network.http_connection_manager",
-			"typed_config": obj{
-				"@type":       "type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager",
-				"stat_prefix": "edge",
-				// cloudflared is the only client, so the address Cloudflare passes is trusted.
-				"use_remote_address":           false,
-				"common_http_protocol_options": obj{"idle_timeout": "300s"},
-				"route_config":                 obj{"name": "routes", "virtual_hosts": vhosts},
-				"http_filters": slices.Concat(
-					// A route's rate limit comes first, so it protects the authorizer too.
-					[]any{obj{"name": "envoy.filters.http.local_ratelimit", "typed_config": obj{
-						"@type":       "type.googleapis.com/envoy.extensions.filters.http.local_ratelimit.v3.LocalRateLimit",
-						"stat_prefix": "edge_rate",
-					}}},
-					authzFilters(services),
-					[]any{
-						obj{"name": "envoy.filters.http.grpc_web", "typed_config": obj{"@type": "type.googleapis.com/envoy.extensions.filters.http.grpc_web.v3.GrpcWeb"}},
-						obj{"name": "envoy.filters.http.router", "typed_config": obj{"@type": "type.googleapis.com/envoy.extensions.filters.http.router.v3.Router"}},
-					},
-				),
-			},
+			"name":         "envoy.filters.network.http_connection_manager",
+			"typed_config": hcm,
 		}}}},
 	}}}
 }
+
+// localAccessLog is a line on the local edge's console, the AppHost's dashboard, for each
+// request: the host and path it came for, without the query, which may hold a sign-in's code;
+// the service it went to; and the status with Envoy's response flags, such as UAEX for one the
+// authorizer refused, NR for one no route matched, or UH for one no ready replica could take.
+var localAccessLog = obj{"name": "envoy.access_loggers.stdout", "typed_config": obj{
+	"@type": "type.googleapis.com/envoy.extensions.access_loggers.stream.v3.StdoutAccessLog",
+	"log_format": obj{"text_format_source": obj{"inline_string": "%REQ(:METHOD)% %REQ(:AUTHORITY)%%PATH(NQ:ORIG_OR_PATH)% %PROTOCOL% -> " +
+		"%UPSTREAM_CLUSTER% %RESPONSE_CODE% %RESPONSE_FLAGS% %DURATION%ms\n"}},
+}}
 
 func virtualHost(host string, routes []routeEntry) obj {
 	routes = slices.Clone(routes)
