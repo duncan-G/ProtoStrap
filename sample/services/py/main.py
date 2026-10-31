@@ -240,6 +240,9 @@ def main() -> None:
         log_config=None,
         access_log=False,
         server_header=False,
+        # Longer than Envoy keeps an idle connection (60 s): uvicorn's default, 5 s, closes
+        # connections the edge is about to reuse, and requests fail at random.
+        timeout_keep_alive=65,
         # The graceful shutdown follows draining and ends inside the spec's 20 s stop.
         timeout_graceful_shutdown=5,
     )
