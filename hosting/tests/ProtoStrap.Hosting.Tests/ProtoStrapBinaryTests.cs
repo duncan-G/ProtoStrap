@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Text;
+using System.Text.RegularExpressions;
 using Aspire.Hosting;
 using Aspire.Hosting.ApplicationModel;
 using Microsoft.Extensions.DependencyInjection;
@@ -439,6 +440,11 @@ public class ProtoStrapBinaryTests
         if (go is null)
             Assert.Skip("needs go");
         var checkout = CheckoutOfThisFile();
+        // Go never downloads a toolchain here, so one older than go.mod's can't list the module.
+        var required = Version.Parse(Regex.Match(File.ReadAllText(Path.Combine(checkout, "go.mod")), @"^go\s+(\d+\.\d+)", RegexOptions.Multiline).Groups[1].Value);
+        var running = (await RunAsync(go, checkout, "env", "GOVERSION")).Trim();
+        if (Version.Parse(Regex.Match(running, @"^go(\d+\.\d+)").Groups[1].Value) < required)
+            Assert.Skip($"needs Go {required} or later, which go.mod names, and {go} is {running}");
         var listed = await RunAsync(go, checkout, "list", "-deps",
             "-f", "{{if not .Standard}}{{range .GoFiles}}{{$.Dir}}/{{.}}\n{{end}}{{range .EmbedFiles}}{{$.Dir}}/{{.}}\n{{end}}{{end}}", "./cmd/protostrap");
         var files = listed.Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(f => Path.GetRelativePath(checkout, f).Replace('\\', '/')).ToList();

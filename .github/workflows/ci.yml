@@ -31,6 +31,11 @@ jobs:
       - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: 10.0.x
+      # The tests build Go programs, and list what ./cmd/protostrap is built from, with the Go
+      # that go.mod names.
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
       # The tests trace real projects with `dotnet msbuild`, and generate the spec that the Go
       # tests read back from hosting/tests/ProtoStrap.Hosting.Tests/Golden.
       - run: dotnet test hosting/ProtoStrap.Hosting.slnx
