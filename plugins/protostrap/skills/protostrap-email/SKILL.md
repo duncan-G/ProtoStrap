@@ -113,8 +113,11 @@ Software that only speaks SMTP can't use the role. Give it a sender that calls t
   RUN /opt/keycloak/bin/kc.sh build
   ```
 
-  - Build the SES client lazily, on the first send. Keycloak starts every provider's factory,
-    even locally, where there's no AWS region.
+  - Build the SES client lazily, on the first send, so Keycloak starts where there's no AWS
+    region (with the sender selected at build time, only its factory is loaded).
+  - The selection is build time: `KC_SPI_EMAIL_SENDER__PROVIDER` (two underscores; one is
+    ignored). Under `aspire run`, `start-dev` rebuilds at start, so setting it to `default` there
+    sends with Keycloak's SMTP sender; `start --optimized` refuses a different value.
   - The realm's `smtpServer` still supplies `from` and `fromDisplayName`.
   - The Keycloak component has `email` in its `uses` like any other.
   - The SPI must match the server's version, so check the interface on each Keycloak upgrade.

@@ -18,7 +18,9 @@ CMD ["opentelemetry-instrument", "python", "main.py"]
 ```
 
 - With `OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf`, which ProtoStrap sets, it picks the HTTP
-  exporter, so `opentelemetry-exporter-otlp-proto-http` must be installed.
+  exporter, so `opentelemetry-exporter-otlp-proto-http` must be installed. Without the
+  variable the distro picks gRPC, and with only the HTTP exporter installed it starts with no
+  telemetry: under `aspire run`, give the container `WithOtlpExporter(OtlpProtocol.HttpProtobuf)`.
 - **Keep one process per replica.** Uvicorn's `--workers` and gunicorn fork after the SDK
   starts, and forked workers need extra setup to export. ProtoStrap scales replicas instead.
 - **Leave out the readiness path and metrics:**
@@ -29,11 +31,18 @@ CMD ["opentelemetry-instrument", "python", "main.py"]
 
 ## Logs
 
-Keep the JSON formatter on stdout (protostrap-contract's `references/python.md`), and leave
-`OTEL_PYTHON_LOGGING_AUTO_INSTRUMENTATION_ENABLED` unset, so logs aren't also sent over OTLP.
-For trace IDs in each line, set `OTEL_PYTHON_LOG_CORRELATION=true` in the spec's `env`: the
-logging instrumentation then puts `otelTraceID` and `otelSpanID` on each record, for the
-formatter to write:
+Keep the JSON formatter on stdout (protostrap-contract's `references/python.md`), and turn
+the OTLP log handler off: **`opentelemetry-instrument` adds one by default** (from
+opentelemetry-instrumentation-logging 0.66b, `OTEL_PYTHON_LOG_AUTO_INSTRUMENTATION` defaults
+to true), and adds it again after `logging.basicConfig(force=True)`, so every line leaves
+twice. Set, in the Dockerfile or the spec's `env`:
+
+```dockerfile
+ENV OTEL_PYTHON_LOG_AUTO_INSTRUMENTATION=false OTEL_LOGS_EXPORTER=none OTEL_PYTHON_LOG_CORRELATION=true
+```
+
+With log correlation on, the logging instrumentation puts `otelTraceID` and `otelSpanID` on
+each record, for the formatter to write:
 
 ```python
 "trace_id": getattr(record, "otelTraceID", None),
