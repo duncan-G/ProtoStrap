@@ -73,21 +73,26 @@ internal static class SpecStep
             logger.LogInformation("Wrote {Spec}", result.SpecPath);
         }
 
-        await CheckAsync(environment.CheckCommand, result.SpecPath, logger, cancellationToken);
+        await CheckAsync(environment.Binary, environment.CheckCommand, result.SpecPath, logger, cancellationToken);
         return result;
     }
 
-    /// <summary>CheckAsync runs `protostrap check` on the spec, if protostrap can be found.</summary>
-    private static async Task CheckAsync(string? command, string specPath, ILogger logger, CancellationToken cancellationToken)
+    /// <summary>
+    /// CheckAsync runs `protostrap check` on the spec, if protostrap can be found, and warns when
+    /// it isn't the AppHost's ProtoStrap.
+    /// </summary>
+    private static async Task CheckAsync(ProtoStrapBinary binary, string? command, string specPath, ILogger logger, CancellationToken cancellationToken)
     {
         if (command is null)
             return;
-        var executable = Resolve(command);
+        var executable = binary.Find(command);
         if (executable is null)
         {
             logger.LogInformation("{Command} isn't installed, so protostrap check didn't run on {Spec}", command, specPath);
             return;
         }
+        if (await binary.MismatchAsync(executable, cancellationToken) is { } mismatch)
+            logger.LogWarning("{Mismatch}", mismatch);
 
         var start = new ProcessStartInfo(executable)
         {
@@ -113,20 +118,5 @@ internal static class SpecStep
         foreach (var line in text.Split('\n'))
             message.Append("\n  ").Append(line.TrimEnd());
         throw new SpecGenerationException(message.ToString());
-    }
-
-    /// <summary>
-    /// Resolve returns a path as it is, or a name looked up on PATH, or null if there is no such
-    /// file.
-    /// </summary>
-    private static string? Resolve(string command)
-    {
-        if (command.Contains(Path.DirectorySeparatorChar) || command.Contains(Path.AltDirectorySeparatorChar))
-            return File.Exists(command) ? command : null;
-        var names = OperatingSystem.IsWindows() ? new[] { command + ".exe", command } : [command];
-        return (Environment.GetEnvironmentVariable("PATH") ?? "")
-            .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
-            .SelectMany(directory => names.Select(name => Path.Combine(directory, name)))
-            .FirstOrDefault(File.Exists);
     }
 }

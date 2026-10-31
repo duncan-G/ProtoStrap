@@ -20,4 +20,11 @@
     <InternalsVisibleTo Include="ProtoStrap.Hosting.Tests" />
   </ItemGroup>
 
+  <!-- ProtoStrapCheckout is the ProtoStrap checkout this assembly is built from, where the local
+       edge builds protostrap when it isn't on PATH (ProtoStrapBinary.cs). A package's consumers
+       don't have the checkout it was packed from, so packing leaves it out. -->
+  <ItemGroup Condition="'$(_IsPacking)' != 'true'">
+    <AssemblyMetadata Include="ProtoStrapCheckout" Value="$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)../../..'))" />
+  </ItemGroup>
+
 </Project>

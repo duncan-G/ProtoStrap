@@ -531,7 +531,9 @@ public static IResourceBuilder<ProtoStrapEnvironmentResource> AddProtoStrapEnvir
    anything holding a secret parameter becomes a key in `secrets`.
 3. **Trace inputs.** For each project, an MSBuild evaluation of its reference closure (see
    [Image tags](#image-tags)).
-4. **Write.** Canonical YAML, only if it changed, then `protostrap check` on it.
+4. **Write.** Canonical YAML, only if it changed, then `protostrap check` on it, with a
+   warning first if that `protostrap` isn't the AppHost's version (see
+   [The local edge](#the-local-edge)).
 
 The step doesn't depend on Aspire's `process-parameters` step. It writes parameter names,
 never values, so generating the spec needs no secrets and runs unattended in CI. When it
@@ -772,11 +774,48 @@ version), configured by the same renderer.
   gRPC checks ask for the server as a whole (service `""`), since no replica has
   `PROTOSTRAP_COMPONENT` there; HTTP checks still send the component's name as the host,
   which a service skips testing outside ProtoStrap.
-- **It is rendered by `protostrap edge render`,** just before the container starts, once every
-  endpoint has its port. The AppHost writes the routing to `obj/protostrap-edge/routing.json`
-  and the renderer writes Envoy's files beside it, which the container mounts. `protostrap`
-  must be on `PATH` (or named by `WithCheck(...)`), built from the ProtoStrap checkout at the
-  AppHost's version; without it the edge doesn't start, and says so.
+- **The dashboard shows it in front of the application.** Its links are each host's local
+  hostname, by the host's name; its endpoint's own URL, `http://localhost:20000`, matches no
+  host, so it is left to the details. It references each service it reaches, so the graph
+  draws it in front of them. Its console has a line for each request: the method, host and
+  path (without the query, which may hold a sign-in's code), the service it went to, the
+  status, and Envoy's response flags, such as `UAEX` for a request the authorizer refused,
+  `NR` for one no route matched, or `UH` for one no ready replica could take. An account's
+  edge doesn't log requests. A service's own URL reaches it directly, past the edge's routing
+  and authorization.
+- **It is rendered by `protostrap edge render`,** as the container is created, once every
+  service it reaches has its address on Aspire's container network: the edge depends on each
+  service with routes and each authorizer of one, so Aspire's container tunnel gives each
+  project an address first. The AppHost writes the routing to `obj/protostrap-edge/routing.json`
+  and the renderer writes Envoy's files beside it, which the container mounts.
+- **It renders with the AppHost's own `protostrap`,** which `protostrap-build`, nested under the
+  edge on the dashboard, builds from the ProtoStrap checkout ProtoStrap.Hosting is built from
+  into `obj/protostrap/`, so it is the AppHost's version. It builds as the AppHost starts,
+  before the edge needs it, and again each time the edge starts: Go's build cache makes that a
+  no-op, a tenth of a second, when nothing changed, and rebuilds what did. A `protostrap` on
+  `PATH` isn't used, so an old one can't render the edge. The build needs Go (on `PATH`, in
+  `GOROOT`, or where Go's installer puts it) at the version `go.mod` names, and never
+  downloads a toolchain unless `GOTOOLCHAIN` says to. Its state is `Up to date`, or `Build
+  failed` with Go's output in its console, and then the edge doesn't start either.
+- **It says when the checkout moves on.** Every 5 seconds it looks at the checkout's files that
+  go into `protostrap`: `go.mod`, and everything under `cmd/` and `internal/` but tests and
+  test data, such as the operator UI's embedded files. Once one changed after the last build
+  started, its state is `Behind`, and its console names the file: the edge still renders
+  with the `protostrap` from before. Its **Rebuild** command builds `protostrap`, then restarts
+  the edge with it; a failed build leaves the edge as it is. Restarting the edge rebuilds too.
+- **Otherwise it renders with a `protostrap` the AppHost didn't build**: the one `WithCheck(...)`
+  names (`protostrap-build` is hidden then), or, without a checkout (a package) or without Go
+  (`protostrap-build` says `Go not found`), `protostrap` on `PATH`. Without one, the edge
+  doesn't start, and says what to install. Such a binary may not be the AppHost's version, so
+  the edge's console warns when it can tell, and the edge still renders with it. With a
+  checkout, the binary must record the checkout's commit (Go writes it into every binary it
+  builds in a git checkout; git says the checkout's), and must be newer than every file of the
+  checkout that goes into it, as above; Go touches the binary each time it checks one is up to
+  date, so its time is when it last matched the source. A binary that doesn't record its
+  commit gets a warning too. Without a checkout, `protostrap version` must be
+  ProtoStrap.Hosting's version. The `protostrap-spec` step warns the same way before
+  `protostrap check`, which always runs the `protostrap` on `PATH`, or the one `WithCheck`
+  names.
 
 - **`aspire run` is unchanged.** `PublishAsProtoStrap*` callbacks and the ProtoStrap
   environment do nothing in run mode.

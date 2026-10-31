@@ -171,9 +171,20 @@ builder.AddProject<Projects.Shop_OrdersWorker>("orders-worker")
 
 - **With hosts, `aspire run` runs the edge** (`protostrap-edge`): the Envoy an account runs,
   serving `http://<local hostname>:20000` with each service's routes and authorizer. It
-  needs `protostrap` on `PATH` (`go build -o ~/.local/bin/protostrap ./cmd/protostrap` in a
-  ProtoStrap checkout at the AppHost's version). Don't add a gateway of the application's
-  own for local routing: test routes through this one.
+  renders with the `protostrap` that `protostrap-build`, under it on the dashboard, builds with
+  Go from the ProtoStrap checkout the AppHost references, so the machine needs Go at the
+  version ProtoStrap's `go.mod` names. Don't add a gateway of the application's own for local
+  routing: test routes through this one.
+- **When `protostrap-build` says `Behind`,** ProtoStrap's Go changed since it built: use its
+  Rebuild command (or restart the edge) for the edge to pick it up. `Build failed` has Go's
+  output in its console.
+- **If the edge or the spec step warns that `protostrap` "isn't the AppHost's ProtoStrap",**
+  that's a binary the AppHost didn't build (on `PATH`, or named by `WithCheck`): rebuild it with
+  the `go build` command the warning gives. Until then it behaves as that older ProtoStrap.
+- **Open the app from the edge's links** on the dashboard (one per host), not a service's own
+  URL, which skips routing and authorization. The edge's console logs each request with the
+  service it went to and Envoy's response flags: `UAEX` means the authorizer refused it, `NR`
+  that no route matched, `UH` that no replica was ready.
 - Every resource gets `HOST_<NAME>` (the local hostname) and `ORIGIN_<NAME>`
   (`http://<local hostname>:20000`).
 

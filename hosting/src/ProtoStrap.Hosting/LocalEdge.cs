@@ -6,6 +6,7 @@ using System.Text.RegularExpressions;
 using Aspire.Hosting;
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.Eventing;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ProtoStrap.Hosting;
 
@@ -31,56 +32,119 @@ internal static class LocalEdge
     private const string EnvoyTag = "v1.40.2";
 
     /// <summary>
-    /// Add adds the edge's container. Its files are rendered just before it starts, once the
-    /// AppHost has given every service its endpoints.
+    /// Add adds the edge's container. Its files are rendered as Aspire resolves its config
+    /// argument, once every service it reaches has its address on the container network.
     /// </summary>
     public static void Add(IDistributedApplicationBuilder builder, ProtoStrapEnvironmentResource environment)
     {
         var dir = Path.Combine(builder.AppHostDirectory, "obj", Name);
+        var config = new Config(builder, environment, dir);
         var edge = builder.AddContainer(Name, EnvoyImage, EnvoyTag)
             .WithBindMount(dir, "/etc/protostrap", isReadOnly: true)
-            .WithArgs("-c", "/etc/protostrap/envoy.json", "--log-level", "warn")
+            .WithArgs("-c", config, "--log-level", "warn")
             .WithHttpEndpoint(port: environment.LocalEdgePort, targetPort: ListenPort, name: "http", isProxied: false)
             // A container reaches the AppHost's projects at host.docker.internal, which native
             // Docker on Linux doesn't define by itself.
             .WithContainerRuntimeArgs("--add-host=host.docker.internal:host-gateway")
+            .WithUrls(context => LinkHosts(context, environment))
             .ExcludeFromManifest();
         environment.LocalEdge = edge.Resource;
-        builder.Eventing.Subscribe<BeforeResourceStartedEvent>(edge.Resource, async (e, cancellationToken) =>
+        environment.LocalBuild = LocalBuild.Add(builder, environment, edge);
+        builder.Eventing.Subscribe<BeforeStartEvent>((e, _) =>
         {
-            var renderer = Renderer(environment.CheckCommand ?? "protostrap");
-            Directory.CreateDirectory(dir);
-            var model = e.Services.GetService(typeof(DistributedApplicationModel)) as DistributedApplicationModel;
-            var routing = await RoutingAsync(model?.Resources ?? builder.Resources, environment, ListenPort, ResolveAsync, cancellationToken);
-            var routingPath = Path.Combine(dir, "routing.json");
-            await File.WriteAllTextAsync(routingPath, routing, cancellationToken);
-            await RenderAsync(renderer, routingPath, dir, cancellationToken);
+            config.AppServices = e.Services;
+            ReferenceReachedServices(e.Model.Resources, edge.Resource);
+            return Task.CompletedTask;
         });
     }
 
     /// <summary>
-    /// Renderer finds the protostrap binary that renders the edge: a path, or a name on PATH.
+    /// LinkHosts gives the edge a link on the dashboard to each host's local hostname, by the
+    /// host's name, first. The endpoint's own URL, on localhost, matches no host, so it is left
+    /// to the details.
     /// </summary>
-    public static string Renderer(string command)
+    private static void LinkHosts(ResourceUrlsCallbackContext context, ProtoStrapEnvironmentResource environment)
     {
-        if (command.Contains(Path.DirectorySeparatorChar) || command.Contains(Path.AltDirectorySeparatorChar))
+        var hosts = environment.HostSettings.GroupBy(h => h.Name).Select(g => g.Last()).ToList();
+        if (hosts.Count == 0)
+            return;
+        foreach (var url in context.Urls.Where(u => u.Endpoint?.EndpointName == "http"))
+            url.DisplayLocation = UrlDisplayLocation.DetailsOnly;
+        var endpoint = context.GetEndpoint("http");
+        var port = environment.LocalEdgePort.ToString(CultureInfo.InvariantCulture);
+        context.Urls.InsertRange(0, hosts.Select(h => new ResourceUrlAnnotation { Url = $"http://{h.Local}:{port}", DisplayText = h.Name, Endpoint = endpoint }));
+    }
+
+    /// <summary>
+    /// ReferenceReachedServices has the edge reference each service it reaches, once the model is
+    /// complete, so the dashboard draws it in front of them. A service whose settings fail is
+    /// left out: the edge reports that when it renders.
+    /// </summary>
+    internal static void ReferenceReachedServices(IEnumerable<IResource> resources, IResource edge)
+    {
+        List<(IResource Resource, ComponentSettings Settings)> reached;
+        try
         {
-            if (File.Exists(command))
-                return command;
+            reached = ReachedServices(resources);
         }
-        else
+        catch (InvalidOperationException)
         {
-            var names = OperatingSystem.IsWindows() ? new[] { command + ".exe", command } : [command];
-            var found = (Environment.GetEnvironmentVariable("PATH") ?? "")
-                .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
-                .SelectMany(directory => names.Select(name => Path.Combine(directory, name)))
-                .FirstOrDefault(File.Exists);
-            if (found is not null)
-                return found;
+            return;
         }
-        throw new InvalidOperationException(
-            $"The local edge is rendered by `protostrap edge render`, and {command} isn't installed. Build it from the ProtoStrap checkout at the AppHost's version, " +
-            "`go build -o ~/.local/bin/protostrap ./cmd/protostrap`, and put it on PATH, or name it with WithCheck(...).");
+        foreach (var (service, _) in reached)
+            edge.Annotations.Add(new ResourceRelationshipAnnotation(service, "Reference"));
+    }
+
+    /// <summary>
+    /// Config is the edge's -c argument: Envoy's config, rendered when Aspire resolves it. Aspire
+    /// resolves a container's arguments once each host resource they reference has its address on
+    /// the container network, which under its container tunnel is only once the container is
+    /// being created, after its start event. So Config references the services the edge reaches.
+    /// </summary>
+    internal sealed class Config(IDistributedApplicationBuilder builder, ProtoStrapEnvironmentResource environment, string dir)
+        : IValueProvider, IValueWithReferences
+    {
+        private readonly SemaphoreSlim _rendering = new(1, 1);
+
+        /// <summary>AppServices are the AppHost's services, once it starts.</summary>
+        internal IServiceProvider? AppServices { get; set; }
+
+        private IEnumerable<IResource> Resources =>
+            (AppServices?.GetService(typeof(DistributedApplicationModel)) as DistributedApplicationModel)?.Resources ?? builder.Resources;
+
+        public IEnumerable<object> References => ReachedServices(Resources).Select(s => s.Resource);
+
+        // Aspire logs that the edge is waiting for this.
+        public override string ToString() => "the edge's config, from protostrap edge render";
+
+        public async ValueTask<string?> GetValueAsync(CancellationToken cancellationToken = default) =>
+            await RenderAsync((resource, endpoint) => ResolveAsync(resource, endpoint, cancellationToken), cancellationToken);
+
+        /// <summary>
+        /// RenderAsync writes the routing, with each service where resolve says the edge reaches
+        /// it, and renders Envoy's files beside it. It returns where the container reads them.
+        /// </summary>
+        internal async Task<string> RenderAsync(Func<IResource, EndpointAnnotation, Task<string>> resolve, CancellationToken cancellationToken)
+        {
+            await _rendering.WaitAsync(cancellationToken);
+            try
+            {
+                var logger = (AppServices?.GetService(typeof(ResourceLoggerService)) as ResourceLoggerService) is { } loggers && environment.LocalEdge is { } edge
+                    ? loggers.GetLogger(edge)
+                    : NullLogger.Instance;
+                var renderer = await environment.LocalBuild!.EnsureAsync(logger, cancellationToken);
+                Directory.CreateDirectory(dir);
+                var routing = await RoutingAsync(Resources, environment, ListenPort, resolve, cancellationToken);
+                var routingPath = Path.Combine(dir, "routing.json");
+                await File.WriteAllTextAsync(routingPath, routing, cancellationToken);
+                await LocalEdge.RenderAsync(renderer, routingPath, dir, cancellationToken);
+                return "/etc/protostrap/envoy.json";
+            }
+            finally
+            {
+                _rendering.Release();
+            }
+        }
     }
 
     private static async Task RenderAsync(string renderer, string routing, string dir, CancellationToken cancellationToken)
@@ -105,10 +169,10 @@ internal static class LocalEdge
     /// ResolveAsync is where a container on the AppHost's network reaches an endpoint: a
     /// project on the host, a container by its name.
     /// </summary>
-    private static async Task<string> ResolveAsync(IResource resource, EndpointAnnotation endpoint)
+    private static async Task<string> ResolveAsync(IResource resource, EndpointAnnotation endpoint, CancellationToken cancellationToken)
     {
         var reference = new EndpointReference((IResourceWithEndpoints)resource, endpoint, KnownNetworkIdentifiers.DefaultAspireContainerNetwork);
-        return await reference.Property(EndpointProperty.HostAndPort).GetValueAsync(CancellationToken.None) ?? "";
+        return await reference.Property(EndpointProperty.HostAndPort).GetValueAsync(cancellationToken) ?? "";
     }
 
     /// <summary>
@@ -120,32 +184,10 @@ internal static class LocalEdge
         IEnumerable<IResource> resources, ProtoStrapEnvironmentResource environment, int listenPort,
         Func<IResource, EndpointAnnotation, Task<string>> resolve, CancellationToken cancellationToken)
     {
-        var services = new List<(IResource Resource, ComponentSettings Settings)>();
-        foreach (var resource in resources.Where(r => r is IResourceWithEndpoints && !r.IsExcludedFromPublish()).OrderBy(r => r.Name, StringComparer.Ordinal))
-        {
-            if (!resource.TryGetLastAnnotation<ProtoStrapComponentAnnotation>(out var annotation))
-                continue;
-            ComponentSettings settings;
-            try
-            {
-                settings = annotation.Configure();
-            }
-            catch (Exception e)
-            {
-                throw new InvalidOperationException($"{resource.Name}: {annotation.Method} failed, so the local edge can't route to it: {e.Message}", e);
-            }
-            if (settings.Kind == ComponentKind.Service)
-                services.Add((resource, settings));
-        }
-        var authorizers = services.Where(s => s.Settings.Routes.Count > 0 && s.Settings.Authorize is not null)
-            .Select(s => s.Settings.Authorize!.By).ToHashSet();
-
         var routed = new List<RoutedService>();
-        foreach (var (resource, settings) in services)
+        foreach (var (resource, settings) in ReachedServices(resources))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (settings.Routes.Count == 0 && !authorizers.Contains(resource))
-                continue;
             var endpoints = resource.Annotations.OfType<EndpointAnnotation>().ToList();
             var primary = endpoints.FirstOrDefault(e => e.Name == "http") ?? endpoints.FirstOrDefault(e => e.UriScheme == "http")
                 ?? endpoints.FirstOrDefault(e => e.UriScheme != "https") ?? endpoints.FirstOrDefault();
@@ -182,6 +224,34 @@ internal static class LocalEdge
             "0.0.0.0:" + listenPort.ToString(CultureInfo.InvariantCulture),
             Local: true);
         return JsonSerializer.Serialize(routing, JsonOptions);
+    }
+
+    /// <summary>
+    /// ReachedServices are the services the edge reaches: each with routes, and each authorizer
+    /// of one.
+    /// </summary>
+    private static List<(IResource Resource, ComponentSettings Settings)> ReachedServices(IEnumerable<IResource> resources)
+    {
+        var services = new List<(IResource Resource, ComponentSettings Settings)>();
+        foreach (var resource in resources.Where(r => r is IResourceWithEndpoints && !r.IsExcludedFromPublish()).OrderBy(r => r.Name, StringComparer.Ordinal))
+        {
+            if (!resource.TryGetLastAnnotation<ProtoStrapComponentAnnotation>(out var annotation))
+                continue;
+            ComponentSettings settings;
+            try
+            {
+                settings = annotation.Configure();
+            }
+            catch (Exception e)
+            {
+                throw new InvalidOperationException($"{resource.Name}: {annotation.Method} failed, so the local edge can't route to it: {e.Message}", e);
+            }
+            if (settings.Kind == ComponentKind.Service)
+                services.Add((resource, settings));
+        }
+        var authorizers = services.Where(s => s.Settings.Routes.Count > 0 && s.Settings.Authorize is not null)
+            .Select(s => s.Settings.Authorize!.By).ToHashSet();
+        return services.Where(s => s.Settings.Routes.Count > 0 || authorizers.Contains(s.Resource)).ToList();
     }
 
     private static RoutedRoute Route(RouteSettings route)

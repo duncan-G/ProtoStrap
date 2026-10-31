@@ -110,7 +110,9 @@ dotnet run --project apphost -- --operation publish --step protostrap-spec
 ```
 
 The spec is written only if it changed. Then, if `protostrap` is on the `PATH`, the step runs
-`protostrap check` on it (`WithCheck(...)` names another binary, or `null` none). If the
+`protostrap check` on it (`WithCheck(...)` names another binary, or `null` none), warning first
+if that binary isn't the AppHost's version: not built from the checkout's commit and its latest
+changes, or, for a package, not ProtoStrap.Hosting's version. If the
 AppHost describes something ProtoStrap can't run, nothing is written, every problem is listed
 with the resource at fault, and the AppHost exits with 1:
 
@@ -158,9 +160,15 @@ picks a .NET SDK.
 
 With hosts, `aspire run` runs the edge's Envoy as `protostrap-edge`, serving each host's
 local hostname on port 20000 (`WithLocalEdge(port: ...)`), routed and authorized by the same
-`PublishAsProtoStrapService` settings and rendered by `protostrap edge render`, which must
-be on `PATH` ([The local edge](../docs/protostrap-aspire.md#the-local-edge)). Every resource
-gets `HOST_<NAME>` and `ORIGIN_<NAME>` for the local hostnames.
+`PublishAsProtoStrapService` settings and rendered by `protostrap edge render`. The
+`protostrap-build` resource, under the edge, builds that `protostrap` with Go from this checkout
+as the AppHost starts and whenever the edge starts (a no-op when nothing changed), turns
+`Behind` when the checkout's Go changes after a build, and has a Rebuild command that rebuilds
+and restarts the edge ([The local edge](../docs/protostrap-aspire.md#the-local-edge)). Without
+the checkout or Go, the edge uses `protostrap` on `PATH`, with the same warning when it isn't the
+AppHost's version. On the dashboard the edge
+links each host, references the services it reaches, and logs each request it routes. Every
+resource gets `HOST_<NAME>` and `ORIGIN_<NAME>` for the local hostnames.
 
 In run mode, `AddProtoStrapQueue`, `AddProtoStrapBucket` and `AddProtoStrapFiles` add one
 LocalStack container, `protostrap-localstack`, which creates each queue and bucket, as

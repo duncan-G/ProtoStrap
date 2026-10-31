@@ -216,7 +216,10 @@ public static class ProtoStrapEnvironmentExtensions
     /// <summary>
     /// WithCheck sets the protostrap binary that runs `protostrap check` on the spec once it is
     /// written: a name on PATH or a path. It defaults to protostrap, and the check is skipped if
-    /// the binary isn't found. With null, the spec is never checked.
+    /// the binary isn't found. With null, the spec is never checked. The local edge renders with
+    /// a binary this names; for the default, protostrap-build builds protostrap from the ProtoStrap
+    /// checkout this package is built from, and only without the checkout or Go is protostrap on
+    /// PATH used. Both warn when a binary they find isn't the AppHost's version.
     /// </summary>
     public static IResourceBuilder<ProtoStrapEnvironmentResource> WithCheck(
         this IResourceBuilder<ProtoStrapEnvironmentResource> builder, string? command)

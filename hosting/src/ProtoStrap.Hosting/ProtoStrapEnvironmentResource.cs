@@ -44,6 +44,9 @@ public sealed class ProtoStrapEnvironmentResource : Resource, IComputeEnvironmen
     /// <summary>LocalEdge is the edge's container under `aspire run`, once added.</summary>
     internal ContainerResource? LocalEdge { get; set; }
 
+    /// <summary>LocalBuild is the protostrap the edge renders with, added with it.</summary>
+    internal LocalBuild? LocalBuild { get; set; }
+
     internal IngressPoolSettings? IngressPool { get; set; }
 
     internal ScalingPoolSettings? GeneralPool { get; set; }
@@ -69,7 +72,10 @@ public sealed class ProtoStrapEnvironmentResource : Resource, IComputeEnvironmen
     /// CheckCommand is the protostrap binary that checks the spec once it is written, or null
     /// not to check.
     /// </summary>
-    internal string? CheckCommand { get; set; } = "protostrap";
+    internal string? CheckCommand { get; set; } = ProtoStrapBinary.DefaultCommand;
+
+    /// <summary>Binary finds the protostrap binary, and builds it for the local edge. Tests replace it.</summary>
+    internal ProtoStrapBinary Binary { get; set; } = new();
 
     /// <summary>
     /// A component is reached by its name on the overlay network, from any VM.
