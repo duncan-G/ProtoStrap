@@ -74,21 +74,24 @@ is stored in GitHub (see
 People sign in through IAM Identity Center, with MFA, for credentials that last the
 session.
 
-| Group              | Can                                                         | Session  |
-| ------------------ | ----------------------------------------------------------- | -------- |
-| **Org Admin**      | Everything (AdministratorAccess)                            | 4 hours  |
-| **Platform Admin** | View every account read-only, and open the operator UI and Grafana | 12 hours |
-| **Developer**      | View read-only, manage development secrets, and open Grafana | 12 hours |
+| Group              | Can                                                                 | Session  |
+| ------------------ | ------------------------------------------------------------------- | -------- |
+| **Org Admin**      | Everything (AdministratorAccess)                                    | 4 hours  |
+| **Platform Admin** | View every account read-only, and open the operator UI and Grafana  | 12 hours |
+| **Developer**      | View every account read-only, manage dev's secret, and open Grafana | 12 hours |
 
 - **Org Admins** set the platform's secret values, change boundaries and handle anything
   else, in every account.
 - **Platform Admins** watch the platform, in every account: they see it read-only
   (ViewOnlyAccess) and open the operator UI and Grafana. They change nothing, and can't
   read or set secret values.
-- **Developers** run services locally, which read development secrets with the
-  developer's sign-in. Code reaches the platform only through GitHub Actions. They sign in
-  only where they develop (`developer_environments` in `infra/people`). There they open
-  Grafana, to read their services' logs, traces and metrics, but not the operator UI.
+- **Developers** run services locally, which read dev's secret, `<app>/dev`, with the
+  developer's sign-in, and see their telemetry in the Aspire dashboard. Code reaches the
+  platform only through GitHub Actions. Dev is that local run, and nothing is deployed for
+  it: it has no account, and its secret sits in the application's account beside prod's,
+  `<app>/prod`. In every account Developers view the account read-only (ViewOnlyAccess),
+  manage dev's secret, and open Grafana, to read their services' logs, traces and metrics
+  in prod. They can't read prod's secret, which the platform tags, or open the operator UI.
 - **The operator UI** and its logs API are reached through an SSM port forward to data-1
   (see [Operator UI](protostrap.md#operator-ui)), and only Org Admins and Platform Admins
   may open it. The session document a person may start is their role there. Platform
@@ -111,7 +114,7 @@ session.
 
 | Boundary           | Applies to               | Allows                                                                                                                                                                       |
 | ------------------ | ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Infra boundary** | The Infra role           | Building ProtoStrap: its network and VMs, Auto Scaling, ECR, S3, SQS, SES identities, SSM, CloudWatch, EventBridge and SNS for alerts, and IAM roles. Creating secrets, but not reading them |
+| **Infra boundary** | The Infra and Deploy roles | Building ProtoStrap: its network and VMs, Auto Scaling, ECR, S3, SQS, SES identities, SSM documents and commands, CloudWatch, EventBridge and SNS for alerts, and IAM roles. Creating secrets, but not reading them |
 | **Role boundary**  | Every role Infra creates | Running ProtoStrap: ECR, S3, SQS, sending mail with SES, SSM, Auto Scaling, CloudWatch, reading secrets, and taking on component roles                                        |
 
 - **Both** allow only ProtoStrap's own resources, and deny every other AWS service.
@@ -126,6 +129,9 @@ session.
   applies it.
 - **Outside it:** an Org Admin widens the boundary first, or the workflow fails with
   access denied.
+- **Room to widen:** IAM caps a boundary at 6,144 characters, not counting whitespace.
+  Each boundary keeps at least 512 free for `extra_infra_actions` or `extra_role_actions`,
+  and `infra/bootstrap/tests` fails when a change eats into that.
 
 Ex:
 | Change                         | Infra boundary  | Role boundary                |

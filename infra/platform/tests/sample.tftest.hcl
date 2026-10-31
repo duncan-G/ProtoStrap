@@ -32,6 +32,9 @@ mock_provider "aws" {
   mock_resource "aws_s3_bucket" {
     defaults = { arn = "arn:aws:s3:::mock" }
   }
+  mock_data "aws_s3_bucket" {
+    defaults = { arn = "arn:aws:s3:::mock-deploy" }
+  }
   mock_resource "aws_eip" {
     defaults = { allocation_id = "eipalloc-0123456789abcdef0" }
   }
@@ -71,7 +74,7 @@ mock_provider "random" {}
 
 variables {
   spec                  = file("../../sample/protostrap.yaml")
-  environment           = "dev"
+  environment           = "test"
   hosts                 = { sample = "sample.example.com" }
   cloudflare_account_id = "0123456789abcdef0123456789abcdef"
   cloudflare_zone       = "example.com"
@@ -109,7 +112,7 @@ run "sample" {
   }
 
   assert {
-    condition     = aws_secretsmanager_secret.app.name == "sample/dev"
+    condition     = aws_secretsmanager_secret.app.name == "sample/test"
     error_message = "The environment has one secret, <app>/<environment>, as the scheduler names it in SECRET_ID."
   }
 
@@ -179,8 +182,26 @@ run "sample" {
     condition = (strcontains(base64decode(aws_instance.data["data-1"].user_data_base64), "\"swarm_manager\":true") &&
       strcontains(base64decode(aws_instance.data["data-1"].user_data_base64), "protostrap-scheduler.service") &&
       strcontains(base64decode(aws_instance.data["data-1"].user_data_base64), "--wait /var/lib/protostrap/control") &&
+      strcontains(base64decode(aws_instance.data["data-1"].user_data_base64), "VOLUME_LIST=s3://protostrap-123456789012-us-east-1-deploy/volumes/data-1") &&
     !strcontains(base64decode(aws_instance.data["data-1"].user_data_base64), "\"launch_hook\""))
-    error_message = "data-1 runs the swarm manager and the scheduler, waits for its control volume, and has no lifecycle hooks."
+    error_message = "data-1 runs the swarm manager and the scheduler, waits for its control volume, finds its volumes in its list, and has no lifecycle hooks."
+  }
+
+  assert {
+    condition = (aws_s3_object.volumes["data-1"].bucket == data.aws_s3_bucket.deploy.bucket &&
+      aws_s3_object.volumes["data-1"].key == "volumes/data-1" &&
+      toset([for line in split("\n", trimspace(aws_s3_object.volumes["data-1"].content)) : split(" ", line)[1]]) ==
+    toset(["/data/postgres", "/data/redis", "/data/telemetry", "/var/lib/protostrap/control"]))
+    error_message = "data-1's volume list in the deploy bucket names each of its volumes and where it mounts: the stateful components', telemetry's and the control volume."
+  }
+
+  # A data VM mounts its volumes before its zone has a way out to the internet, so it reads
+  # the list through the S3 gateway endpoint rather than asking the EC2 API.
+  assert {
+    condition = (!contains(flatten([for s in data.aws_iam_policy_document.data_vm.statement : tolist(s.actions)]), "ec2:DescribeVolumes") &&
+      anytrue([for s in data.aws_iam_policy_document.data_vm.statement :
+    contains(s.actions, "s3:GetObject") && contains(s.resources, "${data.aws_s3_bucket.deploy.arn}/volumes/*")]))
+    error_message = "Data VMs read their volume lists from the deploy bucket, and don't describe volumes."
   }
 
   assert {
@@ -193,15 +214,68 @@ run "sample" {
     error_message = "The scheduler's config."
   }
 
+  # Bootstrap makes the deploy bucket, so the protostrap binary is in it before any VM
+  # boots. The platform finds it by name and adds the lifecycle rules.
+  assert {
+    condition = (data.aws_s3_bucket.deploy.bucket == "protostrap-123456789012-us-east-1-deploy" &&
+    aws_s3_bucket_lifecycle_configuration.deploy.bucket == data.aws_s3_bucket.deploy.bucket)
+    error_message = "The platform uses bootstrap's deploy bucket, and sets its lifecycle rules."
+  }
+
   assert {
     condition     = toset(local.tunnel_hosts) == toset(["sample.example.com"]) && toset(keys(cloudflare_dns_record.host)) == toset(["sample.example.com"])
     error_message = "Every host points at the tunnel."
   }
 
   assert {
-    condition = (aws_s3_object.hosts.bucket == aws_s3_bucket.deploy.id && aws_s3_object.hosts.key == "hosts.json" &&
+    condition = (aws_s3_object.hosts.bucket == data.aws_s3_bucket.deploy.bucket && aws_s3_object.hosts.key == "hosts.json" &&
     jsondecode(aws_s3_object.hosts.content) == { sample = "sample.example.com" })
     error_message = "hosts.json in the deploy bucket gives the scheduler each host's hostname in this account."
+  }
+}
+
+# Each data VM's list names only the volumes attached to it, one "<volume id> <directory>"
+# per line. Its own state gives each volume the ID it is overridden with.
+run "volume_lists_on_two_data_vms" {
+  command   = apply
+  state_key = "two_data_vms"
+
+  variables {
+    spec = replace(replace(file("../../sample/protostrap.yaml"),
+      "data: { vm: m7g.large, count: 1 }", "data: { vm: m7g.large, count: 2 }"),
+    "image: redis:7.4\n    vm: data-1", "image: redis:7.4\n    vm: data-2")
+  }
+
+  override_resource {
+    target = aws_ebs_volume.control
+    values = { id = "vol-0c" }
+  }
+  override_resource {
+    target = aws_ebs_volume.telemetry
+    values = { id = "vol-0t" }
+  }
+  override_resource {
+    target = aws_ebs_volume.stateful["postgres"]
+    values = { id = "vol-0p" }
+  }
+  override_resource {
+    target = aws_ebs_volume.stateful["redis"]
+    values = { id = "vol-0r" }
+  }
+
+  assert {
+    condition     = aws_s3_object.volumes["data-1"].content == "vol-0c /var/lib/protostrap/control\nvol-0p /data/postgres\nvol-0t /data/telemetry\n"
+    error_message = "data-1 mounts the control volume, postgres's and telemetry's: ${aws_s3_object.volumes["data-1"].content}"
+  }
+
+  assert {
+    condition     = aws_s3_object.volumes["data-2"].content == "vol-0r /data/redis\n" && aws_s3_object.volumes["data-2"].key == "volumes/data-2"
+    error_message = "data-2 mounts only redis's volume: ${aws_s3_object.volumes["data-2"].content}"
+  }
+
+  assert {
+    condition     = strcontains(base64decode(aws_instance.data["data-2"].user_data_base64), "VOLUME_LIST=s3://protostrap-123456789012-us-east-1-deploy/volumes/data-2")
+    error_message = "data-2 reads its own list."
   }
 }
 
@@ -450,7 +524,7 @@ run "operator_ui_and_infra_log" {
   }
 
   assert {
-    condition     = contains(flatten([for s in data.aws_iam_policy_document.scheduler.statement : s.resources if s.sid == "WriteState"]), "${aws_s3_bucket.deploy.arn}/logs/*")
+    condition     = contains(flatten([for s in data.aws_iam_policy_document.scheduler.statement : s.resources if s.sid == "WriteState"]), "${data.aws_s3_bucket.deploy.arn}/logs/*")
     error_message = "The scheduler writes the infra log's archive to the deploy bucket."
   }
 }

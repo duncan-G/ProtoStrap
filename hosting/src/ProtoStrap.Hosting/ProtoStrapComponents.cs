@@ -153,16 +153,19 @@ public sealed class ProtoStrapService
     /// before sending it on (docs/protostrap.md, "Authorizing requests"). The edge sends the
     /// request's method, path and headers, without its body, to the authorizer at path followed
     /// by the request's own path. A 2xx lets the request through with the authorizer's headers
-    /// added, after removing the client's own copies of them; anything else is the response.
+    /// added, after removing the client's own copies of them, and its respond headers added to
+    /// the service's response; anything else is the response.
     /// </summary>
     /// <param name="by">It is the service that answers.</param>
     /// <param name="path">It is the prefix of the path the edge asks for, such as /auth/check; by default none.</param>
     /// <param name="headers">They are the authorizer's response headers added to the request, such as x-user.</param>
     /// <param name="forward">They are the request's headers sent to the authorizer besides Authorization, such as cookie.</param>
-    public ProtoStrapService Authorize<T>(IResourceBuilder<T> by, string? path = null, string[]? headers = null, string[]? forward = null)
+    /// <param name="respond">They are the authorizer's response headers added to the service's response, such as set-cookie.</param>
+    public ProtoStrapService Authorize<T>(IResourceBuilder<T> by, string? path = null, string[]? headers = null, string[]? forward = null,
+        string[]? respond = null)
         where T : IResource
     {
-        Settings.Authorize = new(by.Resource, path, headers ?? [], forward ?? []);
+        Settings.Authorize = new(by.Resource, path, headers ?? [], forward ?? [], respond ?? []);
         return this;
     }
 

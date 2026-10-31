@@ -230,30 +230,53 @@ func TestEC2AssociateAddress(t *testing.T) {
 	})
 }
 
-func TestEC2ReplaceRoute(t *testing.T) {
-	q := &queryServer{handle: func(url.Values) (int, string) { return 200, `<ReplaceRouteResponse/>` }}
+// A zone's private route table starts with no default route, so the first ingress VM
+// creates it.
+func TestEC2RouteIsCreatedWhenThereIsNone(t *testing.T) {
+	q := &queryServer{handle: func(url.Values) (int, string) { return 200, `<CreateRouteResponse/>` }}
 	ec2 := &EC2{Endpoint: start(t, q), Region: "eu-west-1", Credentials: testCreds}
 	if err := ec2.RouteVia(t.Context(), "rtb-1", "0.0.0.0/0", "i-new"); err != nil {
 		t.Fatal(err)
 	}
 	expectForm(t, q.only(t), map[string]string{
-		"Action": "ReplaceRoute", "RouteTableId": "rtb-1", "DestinationCidrBlock": "0.0.0.0/0", "InstanceId": "i-new",
+		"Action": "CreateRoute", "RouteTableId": "rtb-1", "DestinationCidrBlock": "0.0.0.0/0", "InstanceId": "i-new",
 	})
 }
 
-func TestEC2RouteIsCreatedWhenMissing(t *testing.T) {
+// A newer ingress VM takes over the route an older one made. ReplaceRoute can't stand in
+// for CreateRoute: on a table without the route, EC2 answers InvalidParameterValue
+// ("There is no route defined for ... Use CreateRoute instead"), not a not-found code.
+func TestEC2RouteIsReplacedWhenItExists(t *testing.T) {
 	q := &queryServer{handle: func(f url.Values) (int, string) {
-		if f.Get("Action") == "ReplaceRoute" {
-			return 400, `<Response><Errors><Error><Code>InvalidRoute.NotFound</Code><Message>no route</Message></Error></Errors></Response>`
+		if f.Get("Action") == "CreateRoute" {
+			return 400, `<Response><Errors><Error><Code>RouteAlreadyExists</Code><Message>The route identified by 0.0.0.0/0 already exists.</Message></Error></Errors></Response>`
 		}
-		return 200, `<CreateRouteResponse/>`
+		return 200, `<ReplaceRouteResponse/>`
 	}}
 	ec2 := &EC2{Endpoint: start(t, q), Region: "eu-west-1", Credentials: testCreds}
 	if err := ec2.RouteVia(t.Context(), "rtb-1", "0.0.0.0/0", "i-new"); err != nil {
 		t.Fatal(err)
 	}
-	if len(q.calls) != 2 || q.calls[1].Get("Action") != "CreateRoute" {
-		t.Fatalf("expected ReplaceRoute then CreateRoute, got %v", q.calls)
+	if len(q.calls) != 2 || q.calls[0].Get("Action") != "CreateRoute" {
+		t.Fatalf("expected CreateRoute then ReplaceRoute, got %v", q.calls)
+	}
+	expectForm(t, q.calls[1], map[string]string{
+		"Action": "ReplaceRoute", "RouteTableId": "rtb-1", "DestinationCidrBlock": "0.0.0.0/0", "InstanceId": "i-new",
+	})
+}
+
+func TestEC2RouteErrorIsReturned(t *testing.T) {
+	q := &queryServer{handle: func(url.Values) (int, string) {
+		return 403, `<Response><Errors><Error><Code>UnauthorizedOperation</Code><Message>denied</Message></Error></Errors></Response>`
+	}}
+	ec2 := &EC2{Endpoint: start(t, q), Region: "eu-west-1", Credentials: testCreds}
+	err := ec2.RouteVia(t.Context(), "rtb-1", "0.0.0.0/0", "i-new")
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) || apiErr.Code != "UnauthorizedOperation" {
+		t.Fatalf("got %v", err)
+	}
+	if len(q.calls) != 1 {
+		t.Fatalf("an error other than RouteAlreadyExists shouldn't be retried as ReplaceRoute: %v", q.calls)
 	}
 }
 

@@ -1,15 +1,15 @@
 # Templates
 
-Replace `shop` with the spec's `app`, `v0.1.0` with the ProtoStrap version, and `dev` with
-the environment. Every input is in ProtoStrap's `infra/bootstrap/variables.tf` and
-`infra/platform/variables.tf` at that version; check them there before relying on these.
+Replace `shop` with the spec's `app` and `v0.1.0` with the ProtoStrap version. Every input
+is in ProtoStrap's `infra/bootstrap/variables.tf`, `infra/platform/variables.tf` and
+`infra/people/main.tf` at that version; check them there before relying on these.
 
-## infra/bootstrap/dev/main.tf
+## infra/bootstrap/main.tf
 
 ```hcl
-# Bootstraps the dev account: the state bucket, GitHub's OIDC provider, the Infra and Deploy
-# roles and their boundaries, and the dev and dev-infra GitHub environments. An Org Admin
-# applies it once, from their own machine:
+# Bootstraps the application's account: the state and deploy buckets, GitHub's OIDC provider, the Infra
+# and Deploy roles and their boundaries, and the prod and prod-infra GitHub environments. An
+# Org Admin applies it once, from their own machine:
 #
 #   cp terraform.tfvars.example terraform.tfvars    # Then fill it in.
 #   export AWS_PROFILE=... GITHUB_TOKEN=$(gh auth token)
@@ -31,7 +31,7 @@ variable "region" {
 }
 variable "environment" {
   type    = string
-  default = "dev"
+  default = "prod"
 }
 variable "github_repository" {
   description = "owner/repo: gh repo view --json nameWithOwner -q .nameWithOwner"
@@ -61,7 +61,7 @@ module "bootstrap" {
   environment       = var.environment
   github_repository = var.github_repository
 
-  # The platform root's inputs in this account, as TF_VAR_* variables of dev-infra.
+  # The platform root's inputs in this account, as TF_VAR_* variables of prod-infra.
   infra_variables = {
     cloudflare_account_id = var.cloudflare_account_id
     cloudflare_zone       = var.cloudflare_zone
@@ -82,17 +82,17 @@ github_repository     = "owner/repo"
 region                = "us-east-1"
 cloudflare_account_id = "0123456789abcdef0123456789abcdef"
 cloudflare_zone       = "example.com"
-hosts                 = { shop = "shop-dev.example.com" }
+hosts                 = { shop = "shop.example.com" }
 ```
 
-The Cloudflare token goes in with `gh secret set CLOUDFLARE_API_TOKEN --env dev-infra`, not
+The Cloudflare token goes in with `gh secret set CLOUDFLARE_API_TOKEN --env prod-infra`, not
 the tfvars, so it stays out of state.
 
-## infra/dev/main.tf
+## infra/prod/main.tf
 
 ```hcl
-# The dev account's platform: ProtoStrap's platform module for protostrap.yaml. The infra
-# workflow applies it with the Infra role; its inputs come from the dev-infra environment.
+# Prod's platform: ProtoStrap's platform module for protostrap.yaml. The infra workflow
+# applies it with the Infra role; its inputs come from the prod-infra environment.
 terraform {
   required_version = ">= 1.10"
 
@@ -127,27 +127,77 @@ module "protostrap" {
   source = "github.com/duncan-G/protostrap//infra/platform?ref=v0.1.0"
 
   spec                  = file("${path.module}/../../protostrap.yaml")
-  environment           = "dev"
+  environment           = "prod"
   hosts                 = var.hosts
   cloudflare_account_id = var.cloudflare_account_id
   cloudflare_zone       = var.cloudflare_zone
   alert_emails          = var.alert_emails
 
-  # A test environment, torn down often. Prod keeps the defaults: true and false.
-  protect_data_vms      = false
-  force_destroy         = true
-  log_retention_days    = 14
-  backup_retention_days = 7
+  # protect_data_vms and force_destroy keep their defaults, true and false.
+  log_retention_days    = 90
+  backup_retention_days = 35
+  snapshot_retention    = 14
+  client_rate_limit     = 300 # requests per client per 10 seconds; size it from real traffic
 }
 ```
 
-Prod's root differs only in settings: no `protect_data_vms` or `force_destroy`, and
-`log_retention_days = 90`, `backup_retention_days = 35`, `snapshot_retention = 14`,
-`client_rate_limit` sized from real traffic. Other inputs worth knowing: `zones`, `vpc_cidr`
-(can't change later), `cors_origins`, `retired_components`, `retired_queues`,
-`retired_buckets`, `extra_egress`, `operator_hosts`.
+Other inputs worth knowing: `zones`, `vpc_cidr` (can't change later), `cors_origins`,
+`retired_components`, `retired_queues`, `retired_buckets`, `extra_egress`, `operator_hosts`.
 
-## .github/workflows/deploy.yml (dev)
+## infra/people/main.tf
+
+```hcl
+# Who signs in to the application's account, and what they may do: ProtoStrap's people
+# module (its docs/identity.md#people). An Org Admin applies it once, from that account,
+# its organization's management account, after enabling Identity Center in the console,
+# and adds people to the groups in Identity Center:
+#
+#   cp terraform.tfvars.example terraform.tfvars    # Then fill it in.
+#   export AWS_PROFILE=...
+#   terraform init && terraform apply
+#
+# Its state stays on that machine (gitignored).
+terraform {
+  required_version = ">= 1.10"
+  required_providers {
+    aws = { source = "hashicorp/aws", version = "~> 5.60" }
+  }
+}
+
+variable "region" {
+  description = "Identity Center's region."
+  type        = string
+  default     = "us-east-1"
+}
+variable "accounts" {
+  description = "Each deployed environment's AWS account, such as { prod = \"222222222222\" }. Dev, the local run, has none: its secret is in prod's."
+  type        = map(string)
+}
+
+provider "aws" {
+  region = var.region
+}
+
+module "people" {
+  source = "github.com/duncan-G/protostrap//infra/people?ref=v0.1.0"
+
+  # Developers see the account read-only, manage dev's secret, shop/dev, beside prod's, and
+  # open Grafana.
+  accounts = var.accounts
+}
+
+output "permission_sets" { value = module.people.permission_sets }
+output "groups" { value = module.people.groups }
+```
+
+`terraform.tfvars.example` beside it:
+
+```hcl
+region   = "us-east-1"
+accounts = { prod = "222222222222" }
+```
+
+## .github/workflows/deploy.yml
 
 ```yaml
 name: deploy
@@ -162,17 +212,25 @@ permissions:
   contents: read
   id-token: write
 
-# Not deploy-dev: the reusable deploy job holds deploy-<environment>, and GitHub cancels a
+# Not deploy-prod: the reusable deploy job holds deploy-<environment>, and GitHub cancels a
 # run whose workflow and job concurrency groups collide.
 concurrency:
   group: deploy
   cancel-in-progress: false
 
 jobs:
+  # One approval per release, by prod-approval's required reviewers.
+  approve:
+    runs-on: ubuntu-latest
+    environment: prod-approval
+    steps:
+      - run: echo "Deploying ${{ github.sha }} to prod"
+
   plan:
+    needs: approve
     uses: duncan-G/protostrap/.github/workflows/plan.yml@v0.1.0
     with:
-      environment: dev
+      environment: prod
       # apphost: src/Shop.AppHost/Shop.AppHost.csproj   # when an AppHost writes the spec
       protostrap-ref: v0.1.0
 
@@ -180,7 +238,7 @@ jobs:
     needs: plan
     if: needs.plan.outputs.infra-changed == 'true'
     uses: duncan-G/protostrap/.github/workflows/infra.yml@v0.1.0
-    with: { environment: dev, directory: infra/dev, action: apply, protostrap-ref: v0.1.0 }
+    with: { environment: prod, directory: infra/prod, action: apply, protostrap-ref: v0.1.0 }
     secrets: inherit
 
   deploy:
@@ -188,47 +246,16 @@ jobs:
     if: always() && needs.plan.result == 'success' && (needs.infra.result == 'success' || needs.infra.result == 'skipped')
     uses: duncan-G/protostrap/.github/workflows/deploy.yml@v0.1.0
     with:
-      environment: dev
+      environment: prod
       version: ${{ needs.plan.outputs.version }}
       builds: ${{ needs.plan.outputs.builds }}
       protostrap-ref: v0.1.0
 ```
 
-With prod, add after `deploy`, as in ProtoStrap's `docs/production.md#5-the-applications-repository`:
-
-```yaml
-  approve:
-    needs: deploy
-    runs-on: ubuntu-latest
-    environment: prod-approval
-    steps:
-      - run: echo "Deploying ${{ github.sha }} to prod"
-
-  prod-plan:
-    needs: approve
-    uses: duncan-G/protostrap/.github/workflows/plan.yml@v0.1.0
-    with: { environment: prod, protostrap-ref: v0.1.0 }
-
-  prod-infra:
-    needs: prod-plan
-    if: needs.prod-plan.outputs.infra-changed == 'true'
-    uses: duncan-G/protostrap/.github/workflows/infra.yml@v0.1.0
-    with: { environment: prod, directory: infra/prod, action: apply, protostrap-ref: v0.1.0 }
-    secrets: inherit
-
-  prod:
-    needs: [prod-plan, prod-infra]
-    if: always() && needs.prod-plan.result == 'success' && (needs.prod-infra.result == 'success' || needs.prod-infra.result == 'skipped')
-    uses: duncan-G/protostrap/.github/workflows/deploy.yml@v0.1.0
-    with:
-      environment: prod
-      version: ${{ needs.prod-plan.outputs.version }}
-      builds: ${{ needs.prod-plan.outputs.builds }}
-      protostrap-ref: v0.1.0
-```
-
-and copy `infra.yml` as `infra-prod.yml` for prod, with `environment: prod` and
-`directory: infra/prod`.
+The plan and deploy jobs run in the `prod` GitHub environment and infra in `prod-infra`, both
+created by bootstrap; create `prod-approval` by hand, as in ProtoStrap's
+`docs/production.md#5-the-applications-repository`. Required reviewers go on `prod-approval`,
+for one approval per release, and on `prod-infra`; all three are limited to `main`.
 
 ## .github/workflows/infra.yml
 
@@ -238,7 +265,7 @@ name: infra
 on:
   push:
     branches: [main]
-    paths: [infra/dev/**]
+    paths: [infra/prod/**]
   workflow_dispatch:
     inputs:
       action:
@@ -254,8 +281,8 @@ jobs:
   infra:
     uses: duncan-G/protostrap/.github/workflows/infra.yml@v0.1.0
     with:
-      environment: dev
-      directory: infra/dev
+      environment: prod
+      directory: infra/prod
       action: ${{ github.event_name == 'push' && 'apply' || inputs.action }}
       protostrap-ref: v0.1.0
     secrets: inherit
@@ -299,7 +326,7 @@ jobs:
         with: { terraform_version: 1.10.5 }
       - run: terraform fmt -check -recursive infra
       - run: |
-          for dir in infra/bootstrap/dev infra/dev; do
+          for dir in infra/bootstrap infra/prod infra/people; do
             terraform -chdir="$dir" init -backend=false -input=false
             terraform -chdir="$dir" validate
           done

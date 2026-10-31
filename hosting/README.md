@@ -80,7 +80,7 @@ added to the model in run mode, so `aspire run` is unchanged.
 | `AddProtoStrapFiles(name)`                    | The files bucket                                                        |
 | `AddProtoStrapEmail(name, domains)`           | The `email` section: the domains the application sends mail from with SES ([Email](../docs/email.md)) |
 | `.WithReference(queue)`, `.WithReference(bucket)`, `.WithReference(files)`, `.WithReference(email)` | `uses`, without the queue the component's own `Queue(...)` signal reads |
-| `.Authorize(auth, path, headers, forward)`    | `authorize`: the service the edge asks about each request to this one's routes first ([Authorizing requests](../docs/protostrap.md#authorizing-requests)) |
+| `.Authorize(auth, path, headers, forward, respond)` | `authorize`: the service the edge asks about each request to this one's routes first ([Authorizing requests](../docs/protostrap.md#authorizing-requests)) |
 | `.WithProtoStrapSources(pathspecs)`           | More `sources`, for inputs the build can't show, such as generated protobuf code |
 | `.WithProtoStrapConfig(source, target)`       | `config: { from, path }`: a directory of the repository mounted read-only in each replica, and a read-only bind mount of it under `aspire run` ([Config files](../docs/config.md)) |
 | `.OnConfigChange(ConfigChange.Reload)`, `ConfigChange.Run(...)` | `on_config_change`: how a service, worker or stateful component takes new config files |

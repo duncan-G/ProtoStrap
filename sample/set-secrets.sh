@@ -8,12 +8,12 @@
 # PostgreSQL and Redis apply theirs first, then replaces the components that connect to them.
 #
 # Usage:
-#   sample/set-secrets.sh [environment]    # It is dev unless you say otherwise.
+#   sample/set-secrets.sh [environment]    # It is test unless you say otherwise.
 #
 # Set AWS_PROFILE to an Org Admin's credentials for the account, and AWS_REGION to the
 # account's region.
 set -euo pipefail
-environment=${1:-dev}
+environment=${1:-test}
 set_secret="$(cd "$(dirname "$0")/.." && pwd)/scripts/set-secret.sh"
 
 # The values go to set-secret.sh in files only this user can read, never on a command line.

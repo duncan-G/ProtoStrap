@@ -20,12 +20,12 @@ data "aws_iam_policy_document" "scheduler" {
   statement {
     sid       = "ReadReleases"
     actions   = ["s3:GetObject"]
-    resources = ["${aws_s3_bucket.deploy.arn}/*"]
+    resources = ["${data.aws_s3_bucket.deploy.arn}/*"]
   }
   statement {
     sid       = "ListReleases"
     actions   = ["s3:ListBucket"]
-    resources = [aws_s3_bucket.deploy.arn]
+    resources = [data.aws_s3_bucket.deploy.arn]
   }
   # The scheduler writes its state, its certificate, and protostrap/current, the version
   # new VMs install.
@@ -33,10 +33,10 @@ data "aws_iam_policy_document" "scheduler" {
     sid     = "WriteState"
     actions = ["s3:PutObject"]
     resources = [
-      "${aws_s3_bucket.deploy.arn}/state.json",
-      "${aws_s3_bucket.deploy.arn}/scheduler/*",
-      "${aws_s3_bucket.deploy.arn}/protostrap/current",
-      "${aws_s3_bucket.deploy.arn}/logs/*",
+      "${data.aws_s3_bucket.deploy.arn}/state.json",
+      "${data.aws_s3_bucket.deploy.arn}/scheduler/*",
+      "${data.aws_s3_bucket.deploy.arn}/protostrap/current",
+      "${data.aws_s3_bucket.deploy.arn}/logs/*",
     ]
   }
   statement {

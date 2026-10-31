@@ -209,7 +209,8 @@ type Component struct {
 // Authorize is a service that answers the edge for another's requests (docs/protostrap.md,
 // "Authorizing requests"). The edge sends it each request's method, path and headers,
 // without the body, to its port at Path followed by the request's own path. A 2xx lets the
-// request through, with the authorizer's Headers added; anything else is the response.
+// request through, with the authorizer's Headers added to it and its Respond headers added
+// to the service's response; anything else is the response.
 type Authorize struct {
 	// By is the service that answers.
 	By string `yaml:"by"`
@@ -222,6 +223,10 @@ type Authorize struct {
 	// Forward are the request's headers the edge sends the authorizer, besides
 	// Authorization, such as cookie.
 	Forward []string `yaml:"forward"`
+	// Respond are the response headers of the authorizer's 2xx the edge adds to the
+	// service's response, such as set-cookie for a session it renewed. Each value is a
+	// header of its own, after the service's.
+	Respond []string `yaml:"respond"`
 }
 
 // CheckPath is the prefix of the path the edge asks the authorizer for.

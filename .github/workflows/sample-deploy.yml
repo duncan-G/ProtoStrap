@@ -1,5 +1,5 @@
-# This workflow deploys the sample to the dev account. It runs only by hand, so nothing
-# reaches AWS until the dev account is bootstrapped and someone asks for a deploy. Plan
+# This workflow deploys the sample to the test account. It runs only by hand, so nothing
+# reaches AWS until the test account is bootstrapped and someone asks for a deploy. Plan
 # compares with what exists, so a run that changes nothing deployable ends after plan, and
 # a component left behind by a failed deploy is picked up by the next one.
 #
@@ -20,14 +20,14 @@ permissions:
   id-token: write
 
 concurrency:
-  group: sample-deploy-dev
+  group: sample-deploy-test
   cancel-in-progress: false
 
 jobs:
   plan:
     uses: ./.github/workflows/plan.yml
     with:
-      environment: dev
+      environment: test
       spec: sample/protostrap.yaml
       dev-version: true
 
@@ -36,10 +36,11 @@ jobs:
     if: needs.plan.outputs.infra-changed == 'true'
     uses: ./.github/workflows/infra.yml
     with:
-      environment: dev
-      directory: sample/infra/dev
+      environment: test
+      directory: sample/infra/test
       spec: sample/protostrap.yaml
       action: apply
+      dev-version: true
     secrets: inherit
 
   deploy:
@@ -47,7 +48,7 @@ jobs:
     if: always() && needs.plan.result == 'success' && (needs.infra.result == 'success' || needs.infra.result == 'skipped')
     uses: ./.github/workflows/deploy.yml
     with:
-      environment: dev
+      environment: test
       spec: sample/protostrap.yaml
       version: ${{ needs.plan.outputs.version }}
       builds: ${{ needs.plan.outputs.builds }}

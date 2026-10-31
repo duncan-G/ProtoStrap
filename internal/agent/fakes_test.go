@@ -461,6 +461,7 @@ type fakeHooks struct {
 	completes  []string // Each is a hook and its result, such as "launch CONTINUE".
 	heartbeats int
 	err        error
+	errs       []error // Complete's first answers, one per call, before err.
 	order      *[]string
 }
 
@@ -471,7 +472,18 @@ func (h *fakeHooks) Complete(_ context.Context, hook Hook, result string) error 
 	if h.order != nil {
 		*h.order = append(*h.order, "hook "+string(hook)+" "+result)
 	}
+	if len(h.errs) > 0 {
+		err := h.errs[0]
+		h.errs = h.errs[1:]
+		return err
+	}
 	return h.err
+}
+
+func (h *fakeHooks) completed() []string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return slices.Clone(h.completes)
 }
 
 func (h *fakeHooks) Heartbeat(_ context.Context, hook Hook) error {

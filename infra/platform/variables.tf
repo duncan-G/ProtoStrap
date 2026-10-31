@@ -8,7 +8,7 @@ variable "spec" {
 }
 
 variable "environment" {
-  description = "The environment this account runs, such as dev or prod."
+  description = "The environment this account runs, such as prod."
   type        = string
 }
 
@@ -51,7 +51,7 @@ variable "cloudflare_zone" {
 }
 
 variable "email_domains" {
-  description = "The domains this account sends mail from with SES. Null: the spec's email domains. Two accounts can't share a domain, since both would write its bounce. records, so an account that shares the spec with another sends from a domain of its own, such as dev.example.com."
+  description = "The domains this account sends mail from with SES. Null: the spec's email domains. Two accounts can't share a domain, since both would write its bounce. records, so an account that shares the spec with another sends from a domain of its own, such as staging.example.com."
   type        = list(string)
   default     = null
 }
@@ -174,7 +174,7 @@ variable "protect_data_vms" {
 }
 
 variable "force_destroy" {
-  description = "Let a destroy delete the buckets and image repositories while they still hold objects and images. For test environments only: in production, losing them by accident loses backups, files, the application's buckets and every release."
+  description = "Let a destroy delete the buckets and image repositories while they still hold objects and images. For test environments only: in production, losing them by accident loses backups, files and the application's buckets. The deploy bucket is bootstrap's, and stays."
   type        = bool
   default     = false
 }

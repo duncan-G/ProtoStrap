@@ -1,29 +1,28 @@
 #!/bin/bash
 # This script mounts a data VM's EBS volumes (docs/vms.md#data): each stateful component's
 # at /data/<component>, and on data-1 the control volume, which holds the swarm's state and
-# the scheduler's key. Volumes are found by their protostrap:mount tag, so a new
-# component's volume is mounted within a minute of being attached, with no change here.
+# the scheduler's key. The VM's volume list, $VOLUME_LIST, says which volume goes where, one
+# "<volume id> <directory>" per line. Terraform writes it to the deploy bucket
+# (infra/platform/data.tf), which the VM reaches through the S3 gateway endpoint, so
+# mounting needs no way out to the internet. The script runs every minute, so a new
+# component's volume is mounted soon after it is attached, with no change here.
 # A new volume gets an XFS filesystem; one with a filesystem is never formatted.
 #
 #   protostrap-volumes                   mounts whatever is attached.
-#   protostrap-volumes --wait <dir>      first waits, up to 15 minutes, for <dir> to be mounted.
+#   protostrap-volumes --wait <dir>      first waits for <dir> to be mounted, however long
+#                                        that takes: until then the VM has nothing to run.
 #
 # The control volume's swarm/ directory is bind-mounted at /var/lib/docker/swarm, so the
 # swarm survives the instance. Docker must not start before that bind mount is in place,
 # which the unit's ordering ensures.
 set -euo pipefail
 export AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION:?}
+VOLUME_LIST=${VOLUME_LIST:?}
 
 wait_for=""
 if [ "${1:-}" = "--wait" ]; then
   wait_for=$2
 fi
-
-imds() {
-  local token
-  token=$(curl -sf -X PUT http://169.254.169.254/latest/api/token -H 'X-aws-ec2-metadata-token-ttl-seconds: 60')
-  curl -sf -H "X-aws-ec2-metadata-token: $token" "http://169.254.169.254/latest/$1"
-}
 
 # Calling mount_volume <volume id> <dir> mounts the volume at <dir>, and returns false
 # until the volume's device appears.
@@ -58,11 +57,8 @@ bind_swarm() {
 }
 
 mount_all() {
-  local instance volumes
-  instance=$(imds meta-data/instance-id) || return 1
-  volumes=$(aws ec2 describe-volumes \
-    --filters "Name=attachment.instance-id,Values=$instance" "Name=tag-key,Values=protostrap:mount" \
-    --query 'Volumes[].[VolumeId, Tags[?Key==`protostrap:mount`] | [0].Value]' --output text) || return 1
+  local volumes
+  volumes=$(aws s3 cp --only-show-errors "$VOLUME_LIST" -) || return 1
   local ok=0
   while read -r vol dir; do
     [ -n "$vol" ] || continue
@@ -77,15 +73,17 @@ mount_all() {
 }
 
 if [ -n "$wait_for" ]; then
-  deadline=$((SECONDS + 900))
+  # A volume is attached by the same apply that creates the VM, so this normally takes a
+  # minute. If that apply failed before attaching it, the VM waits for the next one.
+  waited=0
   until mountpoint -q "$wait_for"; do
     mount_all || true
     if mountpoint -q "$wait_for"; then
       break
     fi
-    if ((SECONDS > deadline)); then
-      echo "protostrap-volumes: $wait_for isn't mounted after 15 minutes" >&2
-      exit 1
+    if ((SECONDS - waited >= 60)); then
+      echo "protostrap-volumes: still waiting for $wait_for, named in $VOLUME_LIST, to be attached"
+      waited=$SECONDS
     fi
     sleep 5
   done

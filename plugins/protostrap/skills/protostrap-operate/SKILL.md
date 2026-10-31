@@ -26,14 +26,15 @@ spec, the code or a Terraform root, through a pull request and the deploy workfl
 | What runs where, what each component wants, why    | The operator UI, `/api/status`                                   | Platform Admins, Org Admins |
 | What the scheduler and agents decided and saw      | The infra log, `/api/logs`                                       | Platform Admins, Org Admins |
 | What happened yesterday, what to change            | The daily report, `/api/reports`                                 | Platform Admins, Org Admins |
-| What a component itself printed, its traces and metrics | Grafana: Loki, Tempo and Prometheus                          | Developers (where they sign in), Platform Admins, Org Admins |
+| What a component itself printed, its traces and metrics | Grafana: Loki, Tempo and Prometheus                          | Developers, Platform Admins, Org Admins |
 | The scheduler's own view, on the VM                | `sudo protostrap status` on data-1, through an SSM session        | Org Admins       |
 
 Only Platform Admins and Org Admins can open the operator UI. Platform Admins sign in to
 every environment with view-only access and the UI's read-only forward; Developers can't
 open it, so a Developer asks a Platform Admin. Grafana is the other way in: it holds the
-services' own logs, traces and metrics, never ProtoStrap's records, and Developers can
-open it in the environments they sign in to. Ask an Org Admin for the rest.
+services' own logs, traces and metrics, never ProtoStrap's records, and Developers open it
+in each deployed environment with their Developer sign-in, which also has view-only access.
+Ask an Org Admin for the rest.
 
 ### Opening the forwards
 
@@ -46,7 +47,7 @@ them open; run one yourself only if they ask.
 | ------------------------------- | ------------------------- | ------------------------------------------------ |
 | `scripts/operator-ui.sh`        | `http://localhost:7480`   | The operator UI and its API: Platform Admins and Org Admins |
 | `scripts/operator-ui.sh --admin` | `http://localhost:7481`  | The same, on the port that will hold Org Admins' actions: Org Admins |
-| `scripts/telemetry.sh`          | `http://localhost:7482`   | Grafana: Developers where they sign in, Platform Admins, Org Admins |
+| `scripts/telemetry.sh`          | `http://localhost:7482`   | Grafana: Developers, Platform Admins, Org Admins |
 
 ```bash
 AWS_PROFILE=<their profile> AWS_REGION=<region> ../ProtoStrap/scripts/operator-ui.sh
@@ -172,7 +173,7 @@ aws sqs get-queue-attributes --queue-url "$(aws sqs get-queue-url --queue-name p
 A rolled-out release that's wrong is replaced by deploying an earlier commit. Ask the user
 which they want:
 
-- **`git revert`** the change and merge. It goes through dev and approval like any release.
+- **`git revert`** the change and merge. It goes through approval like any release.
 - **Faster:** re-run the deploy workflow's run for the last good commit. Its images are still
   in ECR, so nothing is built. Prod still waits for its approval.
 

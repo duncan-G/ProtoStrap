@@ -19,8 +19,9 @@ scheduler reads it to run replicas. ProtoStrap knows nothing else about the appl
    checked out at `v<version>`, otherwise
    `https://github.com/duncan-G/protostrap/blob/v<version>/docs/protostrap.md`. Where they
    and this skill disagree, they win.
-3. **One spec or two?** If the workflows pass `spec: protostrap.dev.yaml` (or similar), each
-   environment has its own spec. Change every one of them in the same pull request.
+3. **One spec or two?** If the workflows pass `spec: protostrap.staging.yaml` (or another
+   `protostrap.<environment>.yaml`), each deployed environment has its own spec. Change every
+   one of them in the same pull request.
 
 Every field, with its kinds and formats, is in [references/fields.md](references/fields.md).
 How to pick signals, limits and sizes is in [references/scaling.md](references/scaling.md).
@@ -130,7 +131,7 @@ needs a Dockerfile of its own (`FROM keycloak/keycloak:26.1`, plus its files) to
   matches every host.
 - **`hosts` names each host with its hostname** (`shop: shop.example.com`). Routes name the
   host, never the hostname, so they mean the same in every account; each account's
-  Terraform root may give every name its own hostname (`hosts = { shop = "shop.dev.example.com" }`),
+  Terraform root may give every name its own hostname (`hosts = { shop = "shop.staging.example.com" }`),
   and must then give one to every name. Replicas get `HOST_<NAME>` and `ORIGIN_<NAME>`
   (`https://…`): build redirect URLs, cookie domains and allowed origins from them, never
   from a hostname in code or `env`.
@@ -141,6 +142,10 @@ needs a Dockerfile of its own (`FROM keycloak/keycloak:26.1`, plus its files) to
   anything else is the response. Use it for sessions a sign-in service keeps, rather than
   checking a cookie in every service. The authorizer's code is protostrap-contract's
   "An authorizer".
+- **`respond: [set-cookie]`** in `authorize` adds those headers of a 2xx to the service's
+  response, each as a header of its own: for an authorizer that renews the session as it
+  checks it. Without it the client gets none of a 2xx's headers. It can't name
+  `content-length` or a connection's own headers, such as `connection`.
 - `{ route: /py/, rate: 200/s }` rate-limits a route at the edge.
 - External clients can't use native gRPC through the tunnel. They use gRPC-Web, which Envoy
   translates for `protocol: grpc` services (any other service gets it as sent), or HTTP/JSON

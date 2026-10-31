@@ -15,7 +15,7 @@ on:
   workflow_call:
     inputs:
       environment:
-        description: The environment, such as dev. The job runs in its GitHub environment.
+        description: The environment, such as prod. The job runs in its GitHub environment.
         type: string
         required: true
       spec:
@@ -156,11 +156,7 @@ jobs:
           set -euo pipefail
           protostrap check --spec "$SPEC"
 
-          version=$(protostrap plan --spec "$SPEC" --json | jq -r .protostrap)
-          if [ "$DEV_VERSION" = true ]; then
-            hash=$(git -C "$SOURCE" ls-files -s -- cmd internal edge go.mod | git hash-object --stdin | cut -c1-12)
-            version="$version-dev.$hash"
-          fi
+          version=$("$SOURCE/.github/actions/protostrap/version.sh" "$SPEC" "$SOURCE" "$DEV_VERSION")
           protostrap plan --spec "$SPEC" --registry "$REGISTRY" --version "$version" --json > plan.json
           jq . plan.json
 

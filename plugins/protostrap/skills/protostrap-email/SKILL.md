@@ -24,7 +24,8 @@ skill disagree, it wins.
   included, and never log a recipient. Log what was sent and that it succeeded.
 - **The From address must be in an email domain.** The role may send only from
   `*@<domain>`, so a From address elsewhere fails with `AccessDenied`. Read it from
-  configuration, not a constant, since dev may send from another domain.
+  configuration, not a constant, since another deployed environment may send from another
+  domain.
 - **Nothing acts on an account.** The infra workflow creates the identities and records.
   Production access is an Org Admin's request to AWS. Write the steps; don't run them.
 
@@ -53,12 +54,12 @@ skill disagree, it wins.
      `cloudflare_zone`, or the infra plan fails.
    - List a subdomain that sends on its own, and never a wildcard.
    - Keep one email section, with every domain. No queue or bucket may be called `email`.
-2. **Each account.** If dev and prod share the spec, they can't share a domain: both would
-   write its `bounce.` records. Dev's platform root sets a domain of its own, in a zone it
-   manages:
+2. **Each account.** Two accounts can't share a domain: both would write its `bounce.`
+   records. If a second deployed environment shares prod's spec, its platform root sets a
+   domain of its own, in a zone it manages:
 
    ```hcl
-   email_domains = ["dev.shop.example.com"]
+   email_domains = ["staging.shop.example.com"]
    ```
 
    Set `email_dmarc` only where nothing else publishes DMARC for the domain. Check first with
@@ -67,8 +68,8 @@ skill disagree, it wins.
    For prod, write the Org Admin the request: the SES console's "Request production access",
    or `aws sesv2 put-account-details --production-access-enabled --mail-type TRANSACTIONAL
    --website-url <url> --use-case-description "<what the mail is and who asked for it>"`.
-   AWS reviews it, often within a day. Dev can stay in the sandbox, with test addresses
-   verified in SES.
+   AWS reviews it, often within a day. Another deployed environment can stay in the sandbox,
+   with test addresses verified in SES.
 4. **The code** sends with SES (below), and its settings hold the From address.
 
 The pull request says it **runs the infra workflow**. It adds, for each domain, an SES

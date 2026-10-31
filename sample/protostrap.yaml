@@ -1,10 +1,10 @@
-# The sample application has one component of every kind, is small enough to run in a dev
+# The sample application has one component of every kind, is small enough to run in a test
 # account, and is built to be pushed around. Each service and the worker has a knob for
 # load (see sample/README.md and sample/services/README.md), so deploys, replica scaling,
 # VM scaling and scaling from zero can all be tested end to end.
 #
 # The sample has one host, sample. Its hostname differs between accounts, so each account's
-# Terraform config gives it one (sample/infra/dev/main.tf). Routes are paths, which match
+# Terraform config gives it one (sample/infra/test/main.tf). Routes are paths, which match
 # every host.
 app: sample
 protostrap: 0.1.0

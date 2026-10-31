@@ -192,8 +192,9 @@ key in it:
 | The data VMs' role   | The scheduler hashes the keys; the reporter reads its LLM key |
 | Org Admins           | They set the keys                                          |
 
-Platform Admins can't read it, and neither can Developers: they have development secrets
-of their own, under `protostrap-dev/`. This is an accepted risk (see
+Platform Admins can't read it, and neither can Developers, since the platform tags it:
+they have dev's secret, `<app>/dev`, beside it in the same account, for running services
+locally. This is an accepted risk (see
 [What you are accepting](production.md#1-know-what-you-are-accepting)): a compromised component can read every
 other component's keys. Keep what each component holds as narrow as it can be, such as a
 database user per service rather than the superuser.

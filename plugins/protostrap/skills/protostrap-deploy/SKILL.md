@@ -1,6 +1,6 @@
 ---
 name: protostrap-deploy
-description: Ship a change to an application deployed with ProtoStrap and confirm it landed - what must happen before merging (secret values, retired lists, a regenerated spec, an Org Admin's bootstrap change), what the pull request says, whether it runs Terraform, how the deploy workflow's plan, infra, build and deploy jobs run in dev and then, after approval, in prod, watching the run and reading its result, confirming the new release serves, a new component's first deploy, deploying again, and where to go when it fails. Use when asked to deploy, release or ship a change, to get a new component, queue or bucket running in an environment, when a merged change doesn't seem to be live, or to check whether a deploy worked.
+description: Ship a change to an application deployed with ProtoStrap and confirm it landed - what must happen before merging (secret values, retired lists, a regenerated spec, an Org Admin's bootstrap change), what the pull request says, whether it runs Terraform, how the deploy workflow's plan, infra, build and deploy jobs run in prod after approval, watching the run and reading its result, confirming the new release serves, a new component's first deploy, deploying again, and where to go when it fails. Use when asked to deploy, release or ship a change, to get a new component, queue or bucket running in an environment, when a merged change doesn't seem to be live, or to check whether a deploy worked.
 ---
 
 # Deploying
@@ -26,15 +26,14 @@ The design is `docs/protostrap.md#deploy-workflow` and `#deploy-a-release`, and
 ```
 pull request ── ci: tests, spec drift, protostrap check, terraform fmt and validate
 merge to main
+  approve  prod-approval: a person approves the release for prod
   plan     protostrap check; the spec regenerated if an AppHost writes it; the images
            missing from ECR; whether the infra projection changed since the last apply
-  infra    only if it changed: Terraform applies infra/dev (ECR repositories, roles,
-           queues, buckets, DNS, VMs)
+  infra    only if it changed, after prod-infra's own approval: Terraform applies
+           infra/prod (ECR repositories, roles, queues, buckets, DNS, VMs)
   deploy   builds the missing images (arm64), copies ProtoStrap's binary, edge, telemetry
            and upstream images, writes releases/<commit>.json, and has data-1's scheduler
            roll it out, waiting for the result
-  approve  prod-approval: a person approves the release for prod
-  prod-plan, prod-infra (its own approval when Terraform changes), prod
 ```
 
 The rollout: changed components replace a quarter of their replicas at a time, migrations

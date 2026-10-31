@@ -367,7 +367,8 @@ address.
 All S3 traffic goes through the gateway endpoint, image layers included, since ECR serves
 them from S3. The endpoint is free, keeps backups and the scheduler's state off the
 internet, lets bucket policies name it, and takes the heaviest traffic off the ingress VM.
-The files bucket, and the application's other buckets, must not require it: users reach
+It also works before a zone's ingress VM is up: data VMs read their volume lists there, so
+they mount their volumes first. The files bucket, and the application's other buckets, must not require it: users reach
 them with signed URLs, from the internet.
 
 

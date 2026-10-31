@@ -19,7 +19,7 @@ output "registry" {
 output "buckets" {
   description = "The deploy, files and backups buckets, and the application's own, by name."
   value = merge({ for name, b in aws_s3_bucket.app : name => b.bucket }, {
-    deploy  = aws_s3_bucket.deploy.bucket
+    deploy  = data.aws_s3_bucket.deploy.bucket
     files   = aws_s3_bucket.files.bucket
     backups = aws_s3_bucket.backups.bucket
   })

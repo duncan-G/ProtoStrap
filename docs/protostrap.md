@@ -348,7 +348,7 @@ sign-in service that knows each session:
 ```yaml
   api:
     routes: [app/api/]
-    authorize: { by: auth, path: /auth/check, headers: [x-user], forward: [cookie] }
+    authorize: { by: auth, path: /auth/check, headers: [x-user], forward: [cookie], respond: [set-cookie] }
 ```
 
 - **The edge asks `by`** on its port, at `path` followed by the request's own path, with
@@ -361,6 +361,12 @@ sign-in service that knows each session:
 - **The service can trust `headers`:** the edge removes the client's own copies of them
   before it asks, so only the authorizer's arrive. A request the authorizer lets through
   without them arrives without them.
+- **A 2xx can answer the client too,** with the authorizer's response headers named in
+  `respond` added to the service's response, such as a `set-cookie` for a session it
+  renewed. Each is a header of its own, after the service's: two cookies stay two, and of
+  a cookie both set, the browser keeps the authorizer's. No other header of a 2xx reaches
+  the client. `respond` can't name `content-length` or a header of one connection, such as
+  `connection` or `transfer-encoding`: the edge sets those itself.
 - **An authorizer that doesn't answer** within 2 seconds, or isn't ready, gets the client a
   503. The edge never lets a request through unasked.
 - **Only the routes of the service that names it** are authorized. The authorizer's own
@@ -405,12 +411,16 @@ what a component depends on.
 - **Job:** create and change every AWS and Cloudflare resource.
 - **Reads:** the spec, plus a small Terraform config per account (region, network ranges,
   Cloudflare zone).
+- **First,** before an apply, puts the `protostrap` binary of the version the spec's
+  releases run in the deploy bucket, which bootstrap made. So every VM the apply makes
+  boots with its agent: none waits for a release.
 - **Creates from the spec:**
   - **Per scaling pool**, Auto Scaling groups of the spec's VM types: one for general, and
     for compute a Spot group with an On-Demand fallback. Each has the pool's minimum, its
     maximum plus one, scale-in protection on every VM, and launch and terminate hooks that
-    the agent completes. Its launch template boots the ProtoStrap image, which has Docker,
-    the ECR credential helper and `protostrap`, and its user data starts the agent.
+    the agent completes. Its launch template boots Amazon Linux, and its user data installs
+    Docker, the ECR credential helper and `protostrap`, from the deploy bucket, and starts
+    the agent.
     Terraform ignores desired capacity: the scheduler owns it. See
     [Scaling with Auto Scaling groups](vms.md#scaling-with-auto-scaling-groups).
   - **Per zone**, an ingress VM's Auto Scaling group of one, and the zone's Elastic IP.
@@ -433,15 +443,16 @@ what a component depends on.
   - **Per environment**, one empty [secret](secrets.md), `<app>/<environment>`.
   - **Per host**, a Cloudflare DNS record pointing at the tunnel. The tunnel sends every
     host to Envoy.
-- **Creates once:** the [network](network.md), the deploy, files and backups buckets, the tunnel, the
-  `protostrap-deploy` SSM document, and the VMs' roles.
+- **Creates once:** the [network](network.md), the files and backups buckets, the deploy
+  bucket's lifecycle rules, the tunnel, the `protostrap-deploy` SSM document, and the VMs'
+  roles.
 - **Never touches:** replicas or VM counts.
 
 ### Deploy workflow
 
 - **Job:** turn a commit into a running release.
-- **Runs:** on every push to `main` in dev, and in prod in the `prod` GitHub environment
-  after approval. One at a time per environment.
+- **Runs:** on every push to `main`, in the `prod` GitHub environment after approval. One
+  at a time per environment.
 - **Steps:**
   1. `protostrap check` the spec.
   2. Work out every built component's tag from its sources. Build and push only the images
@@ -451,7 +462,8 @@ what a component depends on.
      needs no new ProtoStrap.
   3. Copy the `protostrap` binary, and the edge and telemetry images of the spec's version,
      and every stateful component's upstream `image`, into the deploy bucket and ECR, if
-     they aren't there yet. VMs never pull from Docker Hub.
+     they aren't there yet. The infra workflow has usually put the binary there already.
+     VMs never pull from Docker Hub.
   4. Write the release, `releases/<commit>.json` in the deploy bucket: the spec and every
      component's image tag.
   5. Send `protostrap-deploy <commit>` to data-1 through SSM, and wait for its result.
@@ -521,7 +533,8 @@ what a component depends on.
 - **Runs:** as a systemd service on every VM, data VMs included. systemd restarts it if it
   crashes or stops answering its watchdog.
 - **At boot:** checks Docker, the credential helper and the SSM Agent, and completes its
-  VM's launch hook. It then sets up the container firewall and the credentials redirect
+  VM's launch hook, retrying in the background while Auto Scaling is out of reach, as it
+  is until the zone's ingress VM has made the route out. It then sets up the container firewall and the credentials redirect
   (see [Containers and their VM](network.md#containers-and-their-vm)), calls
   `GET /v1/join` on data-1's fixed address, and joins the swarm, retrying until the
   scheduler answers. Its part in launching and removing VMs is in
@@ -872,9 +885,10 @@ workflow the Deploy role.
 
 ### Boot a VM
 
-1. The scheduler raises a pool's desired capacity, and AWS launches a VM from the
-   ProtoStrap image, which already has Docker, the ECR credential helper and `protostrap`.
-2. User data starts the agent. It checks the VM and completes the launch hook, without
+1. The scheduler raises a pool's desired capacity, and AWS launches a VM from Amazon
+   Linux.
+2. User data installs Docker, the ECR credential helper and `protostrap`, from the deploy
+   bucket, and starts the agent. It checks the VM and completes the launch hook, without
    waiting for the scheduler, so VMs can launch while data-1 is down.
 3. The agent calls `GET /v1/join` and joins the swarm.
 4. On its first sync, the scheduler adds the VM to its pool, with its capacity minus the

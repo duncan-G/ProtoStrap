@@ -4,7 +4,7 @@ How to get from this repository to an application serving real traffic from its 
 production AWS account, and how to run it once it does. In order:
 
 1. [Know what you are accepting](#1-know-what-you-are-accepting): the limits and the gaps.
-2. [Prove it in dev](#2-prove-it-in-dev): nothing has run against real AWS yet.
+2. [Prove it with the sample](#2-prove-it-with-the-sample): nothing has run against real AWS yet.
 3. [Publish ProtoStrap](#3-publish-protostrap) at a version.
 4. [Set up the accounts and people](#4-accounts-and-people).
 5. [Set up the application's repository](#5-the-applications-repository).
@@ -13,7 +13,7 @@ production AWS account, and how to run it once it does. In order:
 8. [Go live](#8-go-live).
 9. [Run it](#9-running-it).
 
-The [sample's walkthrough](../sample/README.md) is the same path for a dev account; this
+The [sample's walkthrough](../sample/README.md) is the same path for a test account; this
 document adds what changes for production.
 
 
@@ -38,18 +38,18 @@ built before go-live.
 | VMs don't roll onto a new image ([New images](vms.md#new-images)) | New VMs boot the latest Amazon Linux; running ones keep theirs. [Replace them by hand](#patching-vms)            |
 | No restore tooling                                           | Backups are taken every night, but restoring one into the live database is manual: nothing stops the components that write to it. [Test restores](#restoring-a-backup) work today |
 | Alerts cover AWS events only                                 | Nothing alerts when the application is down, a backup fails, a volume fills, or jobs reach a dead-letter queue. [Add them](#alerts) |
-| Each account builds its own images                           | Prod rebuilds each image from the same commit. Pin base images by digest, so the build is the same one dev tested     |
-| One spec for every environment                               | Dev runs prod's pool sizes, unless each environment gets [a spec of its own](#one-spec-or-one-per-environment)        |
+| Each account builds its own images                           | A second deployed environment rebuilds each image from the same commit. Pin base images by digest, so both builds are the same |
+| One spec for every environment                               | A second deployed environment runs prod's pool sizes, unless each environment gets [a spec of its own](#one-spec-or-one-per-environment) |
 
 
-## 2. Prove it in dev
+## 2. Prove it with the sample
 
 ProtoStrap's code is tested, but none of it has run against real AWS, Cloudflare or
 GitHub, and no image has been built. The image versions in [`edge/Dockerfile`](../edge/Dockerfile),
 [`telemetry/Dockerfile`](../telemetry/Dockerfile) and the sample's Dockerfiles are
 unverified, as are the telemetry programs' configs (`internal/telemetry`). Before any production account exists, take
-the sample through [its walkthrough](../sample/README.md) in a dev account and check each
-of these:
+the sample, ProtoStrap's own end-to-end test, through [its walkthrough](../sample/README.md)
+in a test account, the environment `test`, and check each of these:
 
 - [ ] Bootstrap, infra and the first deploy work from nothing, with no hand fixes.
 - [ ] Every scaling test in the walkthrough behaves as its table says.
@@ -61,8 +61,9 @@ of these:
 - [ ] [Restore a backup](#restoring-a-backup) into a scratch database.
 - [ ] Destroy the environment and build it again.
 
-Then do the same with your own application in its own dev account, with its real
-`protostrap.yaml`, before prod.
+Then do the same with your own application, with its real `protostrap.yaml`, in prod: its
+first deploys go there, and it serves no one until it [goes live](#8-go-live). Skip the
+last check there: prod keeps its data VMs protected and its buckets undeletable.
 
 
 ## 3. Publish ProtoStrap
@@ -103,19 +104,25 @@ match:
 
 ## 4. Accounts and people
 
-- **One account per environment,** in an AWS Organization: a management account that runs
-  only billing and IAM Identity Center, then `dev` and `prod`. ProtoStrap names its
-  resources on the assumption of one application per account, so a second application
-  gets accounts of its own. Use the same region in dev and prod.
-- **People sign in through Identity Center.** Enable it in the management account's
-  console, then apply [`infra/people`](../infra/people/main.tf) there with the accounts
-  map, and add people to `Org-Admins`, `Platform-Admins` and `Developers`. No IAM users,
-  no access keys ([People](identity.md#people)).
+- **One account per application.** It holds everything: IAM Identity Center, as its
+  organization's management account, prod's platform (its bootstrap and platform roots),
+  and dev's secret. Dev is the local run, so it has no account: its secret, `<app>/dev`,
+  named like every environment's, sits beside prod's, `<app>/prod`. No Terraform makes it:
+  Developers create it once (`aws secretsmanager create-secret --name <app>/dev`), fill it
+  with `scripts/set-secret.sh` and read it with their sign-in. Nothing is deployed for dev,
+  and no workflow touches its secret. ProtoStrap names its resources on the assumption of
+  one application per account, so a second application gets an account of its own, as
+  does a second deployed environment if the application has one. Use one region for all
+  of it.
+- **People sign in through Identity Center.** Enable it in the account's console, then
+  apply [`infra/people`](../infra/people/main.tf) there with the accounts map,
+  `{ prod = "<the account's ID>" }`, and add people to `Org-Admins`, `Platform-Admins` and
+  `Developers`. No IAM users, no access keys ([People](identity.md#people)).
 - **The root user** of every account gets MFA and no access keys.
 - **A budget.** ProtoStrap creates no billing alerts; add an AWS Budget in each account.
-- **Service quotas.** A new account's limits are low. Check that the prod account allows
-  the pools' maxima, in vCPUs, for On-Demand (general, ingress, data, and compute's
-  fallback) and for Spot (compute):
+- **Service quotas.** A new account's limits are low. Check that the account allows the
+  pools' maxima, in vCPUs, for On-Demand (general, ingress, data, and compute's fallback)
+  and for Spot (compute):
 
   ```bash
   aws service-quotas get-service-quota --service-code ec2 --quota-code L-1216C47A   # On-Demand Standard vCPUs
@@ -128,29 +135,30 @@ match:
 
 ## 5. The application's repository
 
-The application's repository holds its spec, its code, a pair of Terraform roots per
-account, and workflows that call ProtoStrap's at a version:
+The application's repository holds its spec, its code, its account's Terraform roots,
+and workflows that call ProtoStrap's at a version:
 
 ```
 protostrap.yaml
 services/…
 infra/
-  bootstrap/dev/main.tf     copies of sample/infra/bootstrap, one per account
-  bootstrap/prod/main.tf
-  dev/main.tf               copies of sample/infra/dev, one per account
-  prod/main.tf
+  bootstrap/main.tf         a copy of sample/infra/bootstrap: the account's bootstrap
+  prod/main.tf              a copy of sample/infra/test: prod's platform
+  people/                   the people module, applied once in the same account
 .github/workflows/
+  ci.yml                    the checks a pull request must pass
   infra.yml                 like sample-infra.yml, once per environment
   deploy.yml                below
 ```
 
 In each copied root, point the module `source` at the version, as in
-[the table above](#3-publish-protostrap), and set `environment`. In the bootstrap roots,
+[the table above](#3-publish-protostrap), and set `environment`. In the bootstrap root,
 `app` is the spec's `app`, which names the environment's secret, and `github_repository` is
 the application's repository.
 
-**The deploy workflow** deploys every push to `main` to dev, waits for someone to approve,
-then deploys the same commit to prod:
+**The deploy workflow** runs on every push to `main`, once CI has passed on its pull
+request. It waits for one approval, then plans, applies infrastructure if it changed, and
+deploys to prod:
 
 ```yaml
 name: deploy
@@ -164,60 +172,40 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  dev-plan:
-    uses: duncan-G/protostrap/.github/workflows/plan.yml@v0.1.0
-    with: { environment: dev, protostrap-ref: v0.1.0 }
-
-  dev-infra:
-    needs: dev-plan
-    if: needs.dev-plan.outputs.infra-changed == 'true'
-    uses: duncan-G/protostrap/.github/workflows/infra.yml@v0.1.0
-    with: { environment: dev, directory: infra/dev, action: apply, protostrap-ref: v0.1.0 }
-    secrets: inherit
-
-  dev:
-    needs: [dev-plan, dev-infra]
-    if: always() && needs.dev-plan.result == 'success' && (needs.dev-infra.result == 'success' || needs.dev-infra.result == 'skipped')
-    uses: duncan-G/protostrap/.github/workflows/deploy.yml@v0.1.0
-    with:
-      environment: dev
-      version: ${{ needs.dev-plan.outputs.version }}
-      builds: ${{ needs.dev-plan.outputs.builds }}
-      protostrap-ref: v0.1.0
-
+  # One approval per release, by prod-approval's required reviewers.
   approve:
-    needs: dev
     runs-on: ubuntu-latest
     environment: prod-approval
     steps:
       - run: echo "Deploying ${{ github.sha }} to prod"
 
-  prod-plan:
+  plan:
     needs: approve
     uses: duncan-G/protostrap/.github/workflows/plan.yml@v0.1.0
     with: { environment: prod, protostrap-ref: v0.1.0 }
 
-  prod-infra:
-    needs: prod-plan
-    if: needs.prod-plan.outputs.infra-changed == 'true'
+  infra:
+    needs: plan
+    if: needs.plan.outputs.infra-changed == 'true'
     uses: duncan-G/protostrap/.github/workflows/infra.yml@v0.1.0
     with: { environment: prod, directory: infra/prod, action: apply, protostrap-ref: v0.1.0 }
     secrets: inherit
 
-  prod:
-    needs: [prod-plan, prod-infra]
-    if: always() && needs.prod-plan.result == 'success' && (needs.prod-infra.result == 'success' || needs.prod-infra.result == 'skipped')
+  deploy:
+    needs: [plan, infra]
+    if: always() && needs.plan.result == 'success' && (needs.infra.result == 'success' || needs.infra.result == 'skipped')
     uses: duncan-G/protostrap/.github/workflows/deploy.yml@v0.1.0
     with:
       environment: prod
-      version: ${{ needs.prod-plan.outputs.version }}
-      builds: ${{ needs.prod-plan.outputs.builds }}
+      version: ${{ needs.plan.outputs.version }}
+      builds: ${{ needs.plan.outputs.builds }}
       protostrap-ref: v0.1.0
 ```
 
+The plan and deploy jobs run in the `prod` GitHub environment, and infra in `prod-infra`.
 The approval is its own environment, `prod-approval`, because every job that uses a
-protected environment waits for approval separately. Gating once, before the prod jobs,
-means one approval per release. The `prod` environment itself only needs to be limited to
+protected environment waits for approval separately. Gating once, before the plan, means
+one approval per release. The `prod` environment itself only needs to be limited to
 `main`.
 
 **GitHub settings.** Bootstrap creates `prod` and `prod-infra`; create `prod-approval` by
@@ -233,16 +221,16 @@ hand.
 
 **Pin base images by digest** in every Dockerfile, such as
 `FROM mcr.microsoft.com/dotnet/aspnet:10.0@sha256:…`. An image's tag is a hash of its
-sources, so prod builds the same tag dev did, but an unpinned base image may have changed
-in between.
+sources, so a second deployed environment builds the same tag prod did, but an unpinned
+base image may have changed in between.
 
 
 ## 6. Production settings
 
 ### The platform root
 
-`infra/prod/main.tf` differs from the dev copy only in its settings. Leave
-`protect_data_vms` and `force_destroy` at their defaults, true and false.
+`infra/prod/main.tf` differs from `sample/infra/test`, which it copies, only in its
+settings. Leave `protect_data_vms` and `force_destroy` at their defaults, true and false.
 
 ```hcl
 module "protostrap" {
@@ -270,10 +258,11 @@ are safe to change later. These are not:
 - **Volume sizes** in the spec only grow. Size `postgres`'s `volume` for a year of data.
 - **The Cloudflare zone settings** the platform sets, Always Use HTTPS and the minimum TLS
   version, apply to the whole zone, not just the application's hosts.
-- **Email domains** can't be shared with dev, since both would write the same `bounce.`
-  records: if dev sends mail, its root sets `email_domains` to a domain of its own, and prod
-  keeps the spec's. Set `email_dmarc` in prod once you know no other mail service publishes
-  DMARC for the domain ([Email](email.md#each-account)).
+- **Email domains** can't be shared between accounts, since both would write the same
+  `bounce.` records: if a second deployed environment sends mail, its root sets
+  `email_domains` to a domain of its own, and prod keeps the spec's. Set `email_dmarc` in
+  prod once you know no other mail service publishes DMARC for the domain
+  ([Email](email.md#each-account)).
 
 ### The spec
 
@@ -290,12 +279,12 @@ are safe to change later. These are not:
 
 ### One spec, or one per environment
 
-By default dev and prod run the same `protostrap.yaml`, so dev pays for prod's pool
-minimums. To size them apart, keep a spec per environment, such as `protostrap.yaml` for
-prod and `protostrap.dev.yaml` for dev. Each environment's platform root reads its own
-file, and its workflow jobs pass it as `spec`. The cost is two files to keep in step:
-run `protostrap check` on both in CI, and change components in both in the same pull
-request.
+By default every deployed environment runs the same `protostrap.yaml`, so a second one
+pays for prod's pool minimums. To size them apart, keep a spec per environment, such as
+`protostrap.yaml` for prod and `protostrap.<environment>.yaml` for each other one. Each
+environment's platform root reads its own file, and its workflow jobs pass it as `spec`.
+The cost is two files to keep in step: run `protostrap check` on both in CI, and change
+components in both in the same pull request.
 
 ### The reporter
 
@@ -308,16 +297,16 @@ without the key, nothing leaves the account and the report is the facts alone.
 
 ## 7. Bootstrap and build prod
 
-The same steps as the sample's walkthrough, in the prod account, by an Org Admin:
+The same steps as the sample's walkthrough, in the application's account, by an Org Admin:
 
-1. **Bootstrap**, from your machine, with the prod account's admin profile:
+1. **Bootstrap**, from your machine, with the account's admin profile:
 
    ```bash
-   terraform -chdir=infra/bootstrap/prod init
+   terraform -chdir=infra/bootstrap init
    ```
 
    ```bash
-   terraform -chdir=infra/bootstrap/prod apply
+   terraform -chdir=infra/bootstrap apply
    ```
 
 2. **The Cloudflare token** for prod's infra workflow, scoped to the prod zone only, with
@@ -377,29 +366,31 @@ The same steps as the sample's walkthrough, in the prod account, by an Org Admin
 
 **Before you open it to traffic:**
 
-- [ ] Every item in [Prove it in dev](#2-prove-it-in-dev) passed.
+- [ ] Every item in [Prove it with the sample](#2-prove-it-with-the-sample) passed, for the
+      sample in its test account and for the application in prod.
 - [ ] Each gap in [Know what you are accepting](#1-know-what-you-are-accepting) is accepted or closed.
 - [ ] Alert emails confirmed, and the [extra alerts](#alerts) in place.
 - [ ] If the application sends mail: SES production access granted in prod's account, and a
       test message from prod delivered to an outside mailbox ([Email](email.md#each-account)).
 - [ ] A test restore of one of prod's own backups worked.
 - [ ] Reviewers set on `prod-approval` and `prod-infra`, and `main` protected.
-- [ ] Someone knows how to [roll back](#rolling-back), and has done it in dev.
+- [ ] Someone knows how to [roll back](#rolling-back), and has done it in the sample's test
+      account, or in prod before go-live.
 
 
 ## 9. Running it
 
 ### Releasing
 
-Merge to `main`. The release goes to dev, waits for approval, then goes to prod. A failed
-rollout rolls itself back to the last good release; the workflow fails and says why.
+Merge to `main`. The release waits for approval, then goes to prod. A failed rollout rolls
+itself back to the last good release; the workflow fails and says why.
 
 ### Rolling back
 
 A release that rolled out but is wrong is replaced by deploying an earlier commit. The usual
-way is `git revert` and a merge, which goes through dev and approval like any release. To
-go faster, re-run the deploy workflow's run for the last good commit: its images are still
-in ECR, so nothing is built.
+way is `git revert` and a merge, which goes through approval like any release. To go
+faster, re-run the deploy workflow's run for the last good commit: its images are still in
+ECR, so nothing is built.
 
 ```bash
 gh run list --workflow deploy.yml --commit <last good commit>
@@ -421,9 +412,11 @@ change to bootstrap ([Adding to ProtoStrap](identity.md#adding-to-protostrap)).
 
 ### Upgrading ProtoStrap
 
-Tag the new version, then in one pull request change the spec's `protostrap:`, every
-workflow's `@v…` and `protostrap-ref`, and every module's `?ref=`. The release updates the
-scheduler first, then every agent. Like any release, it goes through dev before prod.
+Prove the new version with the sample in its test account
+([Prove it with the sample](#2-prove-it-with-the-sample)) and tag it, then in one pull
+request change the spec's `protostrap:`, every workflow's `@v…` and `protostrap-ref`, and
+every module's `?ref=`. The release updates the scheduler first, then every agent. Like any
+release, it waits for approval before prod.
 
 ### Rotating a secret
 
@@ -480,7 +473,8 @@ sudo docker exec restore-test psql -U postgres -c '\l' && sudo docker rm -f rest
 **A real restore** pipes the same dump into the live PostgreSQL, after dropping the
 application's database, while nothing writes to it. ProtoStrap can't yet stop the
 components that write, and has no procedure for swapping in a snapshot's volume, so a real
-restore needs a maintenance window and a plan rehearsed in dev.
+restore needs a maintenance window and a plan rehearsed in the sample's test account, or in
+prod before go-live.
 
 **Copy the backups** somewhere the account can't delete them, such as another account's
 bucket with object lock, if losing the account must not lose the data.

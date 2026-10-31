@@ -180,6 +180,11 @@ to that service's routes:
 - **2xx lets the request through,** with the headers named in `headers` from the answer
   added. Leave them out for an anonymous request the service may still serve; the edge
   has already removed the client's own copies, so the service can trust what arrives.
+- **A 2xx can carry headers back to the client,** those named in `respond`, such as a
+  `set-cookie` when the authorizer renewed the session as it checked it. The edge adds
+  each to the service's response as a header of its own, after the service's, so send one
+  `set-cookie` for each cookie; of a cookie both set, the browser keeps the authorizer's.
+  The client gets no other header of a 2xx.
 - **Anything else is the client's response,** as it is: 401, or a 302 to sign in.
 - **The authorized service reads the headers,** and trusts them only from the edge: a
   call from another service on the overlay carries whatever that service sends.
@@ -212,7 +217,8 @@ access keys in the secret to get around it.
   dependency must have an arm64 build.
 - **Pin base images by digest** (`FROM …@sha256:…`, or `ContainerBaseImage` for .NET), and
   the .NET SDK with `global.json`. Pin the multi-platform index's digest, which includes
-  arm64, not one platform's. An unpinned base makes prod build something dev didn't test.
+  arm64, not one platform's. An unpinned base lets a later build of the same commit differ
+  from the one that was tested.
 - No secrets in the image, no bind mounts, no volumes for services and workers.
 - Anything the build reads from outside its directory must be in the spec's `sources`.
 

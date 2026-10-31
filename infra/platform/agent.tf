@@ -27,7 +27,7 @@ locals {
   vm_settings = {
     app            = local.app
     region         = local.region
-    deploy_bucket  = aws_s3_bucket.deploy.bucket
+    deploy_bucket  = data.aws_s3_bucket.deploy.bucket
     backups_bucket = aws_s3_bucket.backups.bucket
     registry       = local.registry
     launch_hook    = local.launch_hook
@@ -42,6 +42,7 @@ locals {
   vm_files = {
     install_script   = file("${path.module}/templates/protostrap-install.sh")
     volumes_script   = ""
+    volume_list      = ""
     scheduler_config = ""
     units = {
       "protostrap-install.service" = file("${path.module}/templates/protostrap-install.service")
@@ -56,7 +57,7 @@ locals {
     scheduler        = local.scheduler_addr
     scheduler_ca     = "/etc/protostrap/scheduler-ca.pem"
     scheduler_ca_key = "scheduler/ca.pem"
-    deploy_bucket    = aws_s3_bucket.deploy.bucket
+    deploy_bucket    = data.aws_s3_bucket.deploy.bucket
     network          = local.agent_network
   }
 
@@ -94,7 +95,7 @@ data "aws_iam_policy_document" "agent" {
   statement {
     sid       = "ReadTheBinaryAndCertificate"
     actions   = ["s3:GetObject"]
-    resources = ["${aws_s3_bucket.deploy.arn}/protostrap/*", "${aws_s3_bucket.deploy.arn}/scheduler/ca.pem"]
+    resources = ["${data.aws_s3_bucket.deploy.arn}/protostrap/*", "${data.aws_s3_bucket.deploy.arn}/scheduler/ca.pem"]
   }
   statement {
     sid       = "ShipLogs"

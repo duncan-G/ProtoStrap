@@ -2,8 +2,11 @@ package main
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"os/exec"
+	"strings"
 	"time"
 
 	"github.com/duncan-G/protostrap/internal/agent"
@@ -48,8 +51,15 @@ func (h hooks) name(hook agent.Hook) string {
 	return h.terminate
 }
 
+// Complete completes the hook. Auto Scaling answers a hook that isn't in progress, because
+// it was completed or timed out, with a ValidationError, which it wraps in ErrHookDone.
 func (h hooks) Complete(ctx context.Context, hook agent.Hook, result string) error {
-	return h.as.CompleteLifecycleAction(ctx, h.group, h.name(hook), h.instance, result)
+	err := h.as.CompleteLifecycleAction(ctx, h.group, h.name(hook), h.instance, result)
+	var apiErr *aws.APIError
+	if errors.As(err, &apiErr) && apiErr.Code == "ValidationError" && strings.Contains(apiErr.Message, "No active Lifecycle Action") {
+		return fmt.Errorf("%w: %w", agent.ErrHookDone, err)
+	}
+	return err
 }
 
 func (h hooks) Heartbeat(ctx context.Context, hook agent.Hook) error {

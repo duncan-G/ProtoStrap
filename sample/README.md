@@ -9,8 +9,8 @@ VMs. Nothing in ProtoStrap knows about it; it is deployed the way any applicatio
 | [`protostrap.yaml`](protostrap.yaml)     | The spec: api (.NET gRPC), web (Node), py (FastAPI), jobs (.NET worker), migrate (task), postgres and redis |
 | [`services/`](services)                  | Their code, each with a knob that makes load ([services/README.md](services/README.md)) |
 | [`load/`](load)                          | A load generator, Go standard library only                                 |
-| [`infra/bootstrap/`](infra/bootstrap)    | Bootstrap for the dev account: roles, state bucket, GitHub environments    |
-| [`infra/dev/`](infra/dev)                | The dev account's platform, built from the spec                            |
+| [`infra/bootstrap/`](infra/bootstrap)    | Bootstrap for the test account: roles, state and deploy buckets, GitHub environments |
+| [`infra/test/`](infra/test)              | The test account's platform, built from the spec                           |
 | [`set-secrets.sh`](set-secrets.sh)       | Fills in the sample's secret, and rotates its passwords                    |
 | [`compose.yaml`](compose.yaml)           | Runs the services on your machine, without AWS                             |
 
@@ -22,12 +22,12 @@ repository has copies of them that call ProtoStrap's reusable workflows at a ver
 
 ## What you need
 
-- **An AWS account for dev**, used for nothing else: ProtoStrap names its resources on the
-  assumption of one application per account. You need administrator credentials for it,
-  as an Org Admin ([People](../docs/identity.md#people)).
+- **An AWS account to test ProtoStrap in**, used for nothing else: ProtoStrap names its
+  resources on the assumption of one application per account. You need administrator
+  credentials for it, as an Org Admin ([People](../docs/identity.md#people)).
 - **A Cloudflare account** with the domain the sample's host goes in, such as
   `example.com`, already added as a zone, and a host name for the sample, such as
-  `sample-dev.example.com`. Nothing needs to exist at that host yet.
+  `sample-test.example.com`. Nothing needs to exist at that host yet.
 - **This repository on GitHub**, with Actions enabled. The sample's workflows run from it.
 - **On your machine:** Terraform 1.10 or later, the AWS CLI v2 with the Session Manager
   plugin, the GitHub CLI (`gh`), `jq`, `curl`, and Go for the load generator. Docker only
@@ -51,27 +51,27 @@ with these permissions, scoped to the account and the zone:
 An Org Admin does this once, from their own machine. It creates the Terraform state
 bucket, GitHub's OpenID Connect provider, the Infra and Deploy roles with their
 [boundaries](../docs/identity.md#identity-boundaries), and the two GitHub environments the
-workflows run in: `dev` for deploys and `dev-infra` for infrastructure, each with the
+workflows run in: `test` for deploys and `test-infra` for infrastructure, each with the
 variables its workflow needs. After this, no one needs admin credentials to deploy.
 
 ```bash
 cd sample/infra/bootstrap
 cp terraform.tfvars.example terraform.tfvars    # fill in the repository, region, Cloudflare account, zone and host
-export AWS_PROFILE=<an admin profile for the dev account>
+export AWS_PROFILE=<an admin profile for the test account>
 export GITHUB_TOKEN=$(gh auth token)            # admin rights on the repository
 terraform init
 terraform apply
 ```
 
-Then give the infra workflow its Cloudflare token, as a secret of `dev-infra`:
+Then give the infra workflow its Cloudflare token, as a secret of `test-infra`:
 
 ```bash
-gh secret set CLOUDFLARE_API_TOKEN --env dev-infra
+gh secret set CLOUDFLARE_API_TOKEN --env test-infra
 ```
 
 Its state stays on your machine (it is gitignored). Everything it made can be imported
 again if it is lost. To gate infrastructure changes, add required reviewers to the
-`dev-infra` environment in GitHub. To set up sign-in for people, see
+`test-infra` environment in GitHub. To set up sign-in for people, see
 [`infra/people`](../infra/people/main.tf).
 
 
@@ -105,14 +105,14 @@ them in, with the same admin profile:
 
 ```bash
 export CLOUDFLARE_ACCOUNT_ID=<the account id> CLOUDFLARE_API_TOKEN=<the token from above>
-scripts/set-edge-token.sh sample dev
+scripts/set-edge-token.sh sample test
 ```
 
 ```bash
 sample/set-secrets.sh
 ```
 
-Both write to the environment's secret, `sample/dev` ([Secrets](../docs/secrets.md)). The
+Both write to the environment's secret, `sample/test` ([Secrets](../docs/secrets.md)). The
 first puts in the tunnel's token; the second makes passwords for PostgreSQL and Redis, and
 the connection strings the components read. Run the second again to rotate both passwords:
 PostgreSQL and Redis apply theirs in place, then the components that connect are replaced.
@@ -120,7 +120,7 @@ For the daily report to be written by an LLM rather than be facts alone, add an 
 API key (it asks for the value, so it stays out of your shell history):
 
 ```bash
-scripts/set-secret.sh sample/dev Reporter_ANTHROPIC_API_KEY=-
+scripts/set-secret.sh sample/test Reporter_ANTHROPIC_API_KEY=-
 ```
 
 
@@ -141,9 +141,9 @@ tables, and then the services start. Expect 10 to 15 minutes, most of it buildin
 Then, with your host:
 
 ```bash
-curl https://sample-dev.example.com/api/hello
-curl https://sample-dev.example.com/web/hello
-curl https://sample-dev.example.com/py/count
+curl https://sample-test.example.com/api/hello
+curl https://sample-test.example.com/web/hello
+curl https://sample-test.example.com/py/count
 ```
 
 **Watching it.** The scheduler's own view is `protostrap status` on data-1:
@@ -207,7 +207,7 @@ does.
 gh workflow run sample-infra.yml -f action=destroy
 ```
 
-The sample's dev account sets `protect_data_vms = false` and `force_destroy = true`, so this
+The sample's test account sets `protect_data_vms = false` and `force_destroy = true`, so this
 removes everything, the buckets and images included. Then, to remove bootstrap too, with
 the admin profile:
 
@@ -215,8 +215,8 @@ the admin profile:
 terraform -chdir=sample/infra/bootstrap destroy
 ```
 
-Empty the state bucket first, every object version included: it keeps the platform's
-state history.
+Empty the state and deploy buckets first, every object version included: they keep the
+platform's state history, and every release and protostrap binary.
 
 
 ## Running it locally

@@ -9,7 +9,8 @@
 #     up.
 #  2. It sets Docker's address ranges, outside every VPC (docs/network.md#dockers-ranges).
 %{ if data_vm ~}
-#  3. It mounts the VM's EBS volumes before Docker starts.
+#  3. It mounts the VM's EBS volumes before Docker starts, as its volume list in the deploy
+#     bucket says, which it also reads through the S3 gateway endpoint.
 %{ endif ~}
 #  4. It writes the agent's config, and systemd units that install protostrap from the
 #     deploy bucket once the first deploy has put it there, then start the agent${scheduler ? ", the scheduler and the reporter" : ""}.
@@ -62,9 +63,11 @@ PROTOSTRAP_EOF
 chmod 0755 /usr/local/libexec/protostrap-volumes
 cat >/etc/protostrap/volumes.env <<'PROTOSTRAP_EOF'
 AWS_DEFAULT_REGION=${region}
+VOLUME_LIST=${volume_list}
 VOLUMES_ARGS=${swarm_manager ? "--wait /var/lib/protostrap/control" : ""}
 PROTOSTRAP_EOF
-/usr/local/libexec/protostrap-volumes ${swarm_manager ? "--wait /var/lib/protostrap/control" : ""}
+# This is what protostrap-volumes.service runs on later boots, with volumes.env's settings.
+AWS_DEFAULT_REGION=${region} VOLUME_LIST=${volume_list} /usr/local/libexec/protostrap-volumes ${swarm_manager ? "--wait /var/lib/protostrap/control" : ""}
 %{ endif ~}
 %{ if scheduler ~}
 cat >/etc/protostrap/scheduler.json <<'PROTOSTRAP_EOF'

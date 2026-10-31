@@ -686,6 +686,12 @@ var headerName = regexp.MustCompile(`^[a-z0-9!#$%&'*+.^_|~-]+$`)
 var edgeHeaders = map[string]bool{"host": true, "content-length": true, "transfer-encoding": true, "connection": true,
 	"te": true, "upgrade": true, "x-forwarded-for": true, "x-forwarded-proto": true, "x-request-id": true, "x-envoy-original-path": true}
 
+// edgeResponseHeaders are the response headers the edge sets itself on each connection to
+// the client, which an authorizer can't add to the service's response: its content-length is
+// its own body's, and HTTP/2 refuses a message with any of the rest (RFC 9113, 8.2.2).
+var edgeResponseHeaders = map[string]bool{"content-length": true, "transfer-encoding": true, "connection": true,
+	"keep-alive": true, "proxy-connection": true, "te": true, "upgrade": true}
+
 // authorize checks the service that authorizes a component's requests at the edge.
 func (c *checker) authorize(comp *Component) {
 	a := comp.Authorize
@@ -716,14 +722,15 @@ func (c *checker) authorize(comp *Component) {
 	for _, list := range []struct {
 		field string
 		names []string
-	}{{"headers", a.Headers}, {"forward", a.Forward}} {
+		edge  map[string]bool
+	}{{"headers", a.Headers, edgeHeaders}, {"forward", a.Forward, edgeHeaders}, {"respond", a.Respond, edgeResponseHeaders}} {
 		field := list.field
 		for i, name := range list.names {
 			at := f(fmt.Sprintf(".%s[%d]", field, i))
 			switch {
 			case !headerName.MatchString(name):
 				c.add(at, "%q isn't a header name: lower case, such as x-user", name)
-			case edgeHeaders[name]:
+			case list.edge[name]:
 				c.add(at, "the edge sets %s itself", name)
 			}
 		}

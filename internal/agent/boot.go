@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 
@@ -14,7 +15,7 @@ import (
 //  1. It checks Docker, the credential helper and the SSM Agent. If any fails, it abandons
 //     the launch hook so the Auto Scaling group discards the VM.
 //  2. It completes the launch hook without waiting for the scheduler, so VMs can launch
-//     while data-1 is down.
+//     while data-1 is down, and keeps trying in the background while AWS is out of reach.
 //  3. It sets up the container firewall and the credentials redirect, and on an ingress
 //     VM the NAT rules, then takes over the zone.
 //  4. It joins the swarm, retrying until the scheduler answers.
@@ -38,13 +39,7 @@ func (a *Agent) Boot(ctx context.Context) error {
 	if err := a.loadCapacity(ctx); err != nil {
 		return abandon(fmt.Errorf("boot check: %w", err))
 	}
-	if a.hooks != nil {
-		// After an agent restart the hook is long completed, and AWS says so, which is not
-		// an error.
-		if err := a.hooks.Complete(ctx, LaunchHook, HookContinue); err != nil {
-			a.log.Info("launch hook not completed", "err", err)
-		}
-	}
+	a.completeLaunchHook(ctx)
 	if _, err := a.fw.Ensure(ctx); err != nil {
 		return fmt.Errorf("container firewall: %w", err)
 	}
@@ -66,6 +61,50 @@ func (a *Agent) Boot(ctx context.Context) error {
 	a.notifier.Notify("READY=1")
 	a.log.Info("agent ready", "vm", a.cfg.InstanceID, "pool", a.cfg.Pool, "version", a.cfg.Version)
 	return nil
+}
+
+// completeLaunchHook completes the launch hook, so the Auto Scaling group counts the VM.
+// A pool VM can boot before its zone's ingress VM has made the route out, which leaves
+// Auto Scaling out of reach for a while. So the first attempt is part of booting, and the
+// rest go on in the background until AWS answers: neither the hook's timeout nor systemd's
+// start timeout may end a VM whose agent works. After an agent restart the hook is long
+// completed, and AWS says so, which ends the attempts.
+func (a *Agent) completeLaunchHook(ctx context.Context) {
+	a.launchHookDone = make(chan struct{})
+	if a.hooks == nil {
+		close(a.launchHookDone)
+		return
+	}
+	failures := 0
+	done := func(err error) bool {
+		switch {
+		case err == nil:
+			if failures > 0 {
+				a.log.Info("launch hook completed", "attempts", failures+1)
+			}
+			return true
+		case errors.Is(err, ErrHookDone):
+			a.log.Info("launch hook not in progress", "err", err)
+			return true
+		}
+		if failures == 0 {
+			a.log.Warn("completing the launch hook: retrying in the background", "err", err, "every", a.cfg.HookRetry)
+		}
+		failures++
+		return false
+	}
+	if done(a.hooks.Complete(ctx, LaunchHook, HookContinue)) {
+		close(a.launchHookDone)
+		return
+	}
+	go func() {
+		defer close(a.launchHookDone)
+		for a.clock.Sleep(ctx, a.cfg.HookRetry) == nil {
+			if done(a.hooks.Complete(ctx, LaunchHook, HookContinue)) {
+				return
+			}
+		}
+	}()
 }
 
 func (a *Agent) loadCapacity(ctx context.Context) error {

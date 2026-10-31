@@ -2,13 +2,13 @@
 
 ProtoStrap's Terraform is three modules. Each AWS account an application runs in calls
 them from two small roots of its own, as [`sample/infra`](../sample/infra) does for the
-sample's dev account. Everything about the application comes from its `protostrap.yaml`;
+sample's test account. Everything about the application comes from its `protostrap.yaml`;
 the roots hold only what differs between accounts, such as the region, the Cloudflare zone
 and the hosts.
 
 | Module                   | Applied by                                        | Creates                                                                 |
 | ------------------------ | ------------------------------------------------- | ----------------------------------------------------------------------- |
-| [`bootstrap`](bootstrap) | An Org Admin, once per account, from their machine | The state bucket, GitHub's OpenID Connect provider, the Infra and Deploy roles, their boundaries, and the two GitHub environments |
+| [`bootstrap`](bootstrap) | An Org Admin, once per account, from their machine | The state and deploy buckets, GitHub's OpenID Connect provider, the Infra and Deploy roles, their boundaries, and the two GitHub environments |
 | [`platform`](platform)   | The infra workflow, with the Infra role           | Every AWS and Cloudflare resource the application needs, from its spec  |
 | [`people`](people)       | An Org Admin, once per organization               | IAM Identity Center groups and permission sets for Org Admins, Platform Admins and Developers |
 
@@ -16,7 +16,7 @@ and the hosts.
 anyone's admin credentials: from then on, the platform changes only through GitHub
 Actions, inside the boundaries bootstrap set. Then the infra workflow applies the platform,
 an Org Admin fills in the secrets, and the deploy workflow ships releases. The sample's
-[README](../sample/README.md) walks through all of it in a dev account, and
+[README](../sample/README.md) walks through all of it in a test account, and
 [Going to production](../docs/production.md) covers what changes for prod.
 
 **Who may do what** is in [Identity](../docs/identity.md). Widening what the Infra role or
@@ -49,7 +49,7 @@ that is, so a component's whole footprint is in one place. There is no `iam.tf` 
 | `files.tf`        | The files bucket                                                              |
 | `buckets.tf`      | Each of the application's own buckets, with its settings from the spec        |
 | `backups.tf`      | The backups bucket and volume snapshots                                       |
-| `deploy.tf`       | The deploy bucket, with the infra log's archive, the deploy SSM document and its log group |
+| `deploy.tf`       | The deploy bucket's lifecycle rules, with the infra log's archive, the deploy SSM document and its log group |
 | `ui.tf`           | The operator UI's SSM session documents, one per role                         |
 | `telemetry.tf`    | Telemetry's volume, bucket, role, repository and Grafana's SSM session document |
 | `alerts.tf`       | The alerts topic and what feeds it                                            |
@@ -64,7 +64,7 @@ Bootstrap is the same: `state.tf`, `boundaries.tf`, `infra.tf` (the Infra role),
 
 An application's repository has, per account, a bootstrap root and a platform root, like
 [`sample/infra/bootstrap`](../sample/infra/bootstrap/main.tf) and
-[`sample/infra/dev`](../sample/infra/dev/main.tf), with the module source pointing at a
+[`sample/infra/test`](../sample/infra/test/main.tf), with the module source pointing at a
 ProtoStrap version:
 
 ```hcl
@@ -80,8 +80,10 @@ module "protostrap" {
 ```
 
 The platform root's inputs that aren't secret are bootstrap's `infra_variables`, which
-become `TF_VAR_*` variables of the account's infra GitHub environment. Its secrets, such as
-`CLOUDFLARE_API_TOKEN`, are set on that environment with `gh secret set --env`.
+become `TF_VAR_*` variables of the account's infra GitHub environment. GitHub stores their
+names in uppercase, and the infra workflow lowercases each one after `TF_VAR_`, so the
+root's variable names must be lowercase. Its secrets, such as `CLOUDFLARE_API_TOKEN`, are
+set on that environment with `gh secret set --env`.
 
 **Settings worth knowing**, all in [`platform/variables.tf`](platform/variables.tf):
 
@@ -91,7 +93,7 @@ become `TF_VAR_*` variables of the account's infra GitHub environment. Its secre
 | `zones`                        | the first zone | Availability zones to run in, each with its own ingress VM and groups |
 | `vpc_cidr`                     | `10.20.0.0/16` | The VPC's range                                                       |
 | `operator_hosts`               | none           | Operator UIs, behind Cloudflare Access                               |
-| `email_domains`                | the spec's     | The domains this account sends mail from: dev uses its own ([Email](../docs/email.md#each-account)) |
+| `email_domains`                | the spec's     | The domains this account sends mail from: a second deployed environment uses its own ([Email](../docs/email.md#each-account)) |
 | `email_dmarc`                  | none           | The DMARC record for each email domain, for a domain that has none   |
 | `client_rate_limit`            | 0, none        | Requests per client per 10 seconds before Cloudflare blocks it        |
 | `retired_components`, `retired_queues` | none   | Components and queues removed from the spec but kept, so a rollback still works |

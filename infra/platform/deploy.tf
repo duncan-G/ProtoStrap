@@ -1,50 +1,19 @@
 # This file is the deploy workflow's side of the platform
-# (docs/protostrap.md#deploy-workflow): the deploy bucket, which holds every release, the
-# protostrap binary of each version, the scheduler's state and certificate, and the
-# reporter's reports; and the protostrap-deploy command, which the workflow sends to data-1
-# through SSM to start a release.
+# (docs/protostrap.md#deploy-workflow): the deploy bucket's lifecycle rules, and the
+# protostrap-deploy command, which the workflow sends to data-1 through SSM to start a
+# release.
 #
-# The Deploy role itself comes from bootstrap.
+# The deploy bucket, which holds every release, the protostrap binary of each version, the
+# scheduler's state and certificate, and the reporter's reports, comes from bootstrap, with
+# the Deploy role. Bootstrap makes it so the infra workflow can put the protostrap binary in
+# it before this root makes a VM: every VM boots with its agent.
 
-resource "aws_s3_bucket" "deploy" {
-  bucket        = "${local.bucket_prefix}-deploy"
-  force_destroy = var.force_destroy
-  tags          = local.tags
-}
-
-resource "aws_s3_bucket_versioning" "deploy" {
-  bucket = aws_s3_bucket.deploy.id
-  versioning_configuration {
-    status = "Enabled"
-  }
-}
-
-resource "aws_s3_bucket_public_access_block" "deploy" {
-  bucket                  = aws_s3_bucket.deploy.id
-  block_public_acls       = true
-  block_public_policy     = true
-  ignore_public_acls      = true
-  restrict_public_buckets = true
-}
-
-resource "aws_s3_bucket_ownership_controls" "deploy" {
-  bucket = aws_s3_bucket.deploy.id
-  rule {
-    object_ownership = "BucketOwnerEnforced"
-  }
-}
-
-resource "aws_s3_bucket_server_side_encryption_configuration" "deploy" {
-  bucket = aws_s3_bucket.deploy.id
-  rule {
-    apply_server_side_encryption_by_default {
-      sse_algorithm = "AES256"
-    }
-  }
+data "aws_s3_bucket" "deploy" {
+  bucket = "${local.bucket_prefix}-deploy"
 }
 
 resource "aws_s3_bucket_lifecycle_configuration" "deploy" {
-  bucket = aws_s3_bucket.deploy.id
+  bucket = data.aws_s3_bucket.deploy.bucket
   rule {
     id     = "old-versions"
     status = "Enabled"

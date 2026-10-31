@@ -34,7 +34,7 @@ data "aws_iam_policy_document" "reporter" {
   statement {
     sid       = "WriteReports"
     actions   = ["s3:PutObject"]
-    resources = ["${aws_s3_bucket.deploy.arn}/reports/*"]
+    resources = ["${data.aws_s3_bucket.deploy.arn}/reports/*"]
   }
 }
 

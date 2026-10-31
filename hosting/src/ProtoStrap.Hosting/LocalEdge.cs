@@ -213,7 +213,8 @@ internal static class LocalEdge
                 resource.Name, port, ready?.Value ?? "tcp", protocol.ToString().ToLowerInvariant(),
                 settings.Routes.Count == 0 ? null : settings.Routes.Select(Route).ToList(),
                 settings.Authorize is { } a
-                    ? new RoutedAuthorize(a.By.Name, a.Path is { Length: > 0 } p && p != "/" ? p : null, a.Headers.Count > 0 ? a.Headers : null, a.Forward.Count > 0 ? a.Forward : null)
+                    ? new RoutedAuthorize(a.By.Name, a.Path is { Length: > 0 } p && p != "/" ? p : null, a.Headers.Count > 0 ? a.Headers : null,
+                        a.Forward.Count > 0 ? a.Forward : null, a.Respond.Count > 0 ? a.Respond : null)
                     : null,
                 address, healthPort));
         }
@@ -312,5 +313,6 @@ internal static class LocalEdge
 
     private sealed record RoutedRoute(string? Host, string Path, double? Rate);
 
-    private sealed record RoutedAuthorize(string By, string? Path, IReadOnlyList<string>? Headers, IReadOnlyList<string>? Forward);
+    private sealed record RoutedAuthorize(
+        string By, string? Path, IReadOnlyList<string>? Headers, IReadOnlyList<string>? Forward, IReadOnlyList<string>? Respond);
 }

@@ -17,7 +17,7 @@ locals {
 # edge's routes and every replica's HOST_<NAME> and ORIGIN_<NAME>. The scheduler reads it
 # again every minute, so a new hostname reloads the edge's routes and replaces the replicas.
 resource "aws_s3_object" "hosts" {
-  bucket       = aws_s3_bucket.deploy.id
+  bucket       = data.aws_s3_bucket.deploy.bucket
   key          = "hosts.json"
   content      = jsonencode(local.hostnames)
   content_type = "application/json"

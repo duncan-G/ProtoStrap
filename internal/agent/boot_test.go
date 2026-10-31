@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"testing"
 	"time"
@@ -158,10 +159,85 @@ func TestBootOnADataVMHasNoHook(t *testing.T) {
 
 func TestBootAfterAnAgentRestartIgnoresTheCompletedHook(t *testing.T) {
 	h := newHarness(t)
-	h.hooks.err = errors.New("ValidationError: No active Lifecycle Action found")
+	h.hooks.err = fmt.Errorf("%w: ValidationError: No active Lifecycle Action found", ErrHookDone)
 	if err := h.a.Boot(t.Context()); err != nil {
 		t.Fatalf("an already completed hook must not stop the agent: %v", err)
 	}
+	waitForLaunchHook(t, h)
+	if got := h.hooks.completed(); !slices.Equal(got, []string{"launch CONTINUE"}) {
+		t.Fatalf("a hook AWS says is done is tried once: %v", got)
+	}
+}
+
+// waitForLaunchHook waits until the agent has stopped trying to complete the launch hook.
+func waitForLaunchHook(t *testing.T, h *harness) {
+	t.Helper()
+	select {
+	case <-h.a.launchHookDone:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("the agent is still completing the launch hook: %v", h.hooks.completed())
+	}
+}
+
+// A pool VM can boot before its zone's ingress VM has made the route out, so Auto Scaling
+// is out of reach for a while. The agent keeps trying without holding up its boot: if it
+// gave up, the hook would time out and the group would replace a VM whose agent works.
+func TestBootKeepsCompletingTheLaunchHookUntilAWSAnswers(t *testing.T) {
+	h := newHarness(t)
+	unreachable := errors.New("dial tcp 3.5.0.1:443: i/o timeout")
+	h.hooks.errs = []error{unreachable, unreachable, unreachable}
+	if err := h.a.Boot(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if h.notify.count("READY=1") != 1 {
+		t.Fatal("the agent is ready while it keeps trying the hook")
+	}
+	waitForLaunchHook(t, h)
+	if got := h.hooks.completed(); len(got) != 4 || got[3] != "launch CONTINUE" {
+		t.Fatalf("three failures, then the hook completes: %v", got)
+	}
+	h.clock.mu.Lock()
+	defer h.clock.mu.Unlock()
+	waits := 0
+	for _, d := range h.clock.sleeps {
+		if d == h.cfg.HookRetry {
+			waits++
+		}
+	}
+	if waits != 3 {
+		t.Fatalf("it waits HookRetry (%v) before each retry: %v", h.cfg.HookRetry, h.clock.sleeps)
+	}
+}
+
+func TestBootStopsCompletingTheLaunchHookWhenAWSSaysItIsDone(t *testing.T) {
+	h := newHarness(t)
+	h.hooks.errs = []error{errors.New("dial tcp: i/o timeout"), fmt.Errorf("%w: it timed out", ErrHookDone)}
+	if err := h.a.Boot(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	waitForLaunchHook(t, h)
+	if got := h.hooks.completed(); len(got) != 2 {
+		t.Fatalf("it stops once AWS has no hook in progress: %v", got)
+	}
+}
+
+func TestBootStopsCompletingTheLaunchHookWhenCancelled(t *testing.T) {
+	h := newHarness(t)
+	h.hooks.err = errors.New("dial tcp: i/o timeout")
+	ctx, cancel := context.WithCancel(t.Context())
+	if err := h.a.Boot(ctx); err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	waitForLaunchHook(t, h)
+}
+
+func TestBootOnADataVMHasNoHookToComplete(t *testing.T) {
+	h := newHarness(t, dataVM)
+	if err := h.a.Boot(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	waitForLaunchHook(t, h)
 }
 
 func TestBootFailsWithoutAFirewall(t *testing.T) {
@@ -335,6 +411,7 @@ func TestConfigDefaults(t *testing.T) {
 		"spot warning":  c.SpotWarning == 2*time.Minute,
 		"backup retry":  c.BackupRetry == time.Hour,
 		"join retry":    c.JoinRetry == 5*time.Second,
+		"hook retry":    c.HookRetry == 10*time.Second,
 		"secrets dir":   c.SecretsDir == "/run/protostrap/secrets",
 		"secrets mount": c.SecretsMount == "/run/secrets",
 		"secret hook":   c.SecretHookTimeout == 2*time.Minute,

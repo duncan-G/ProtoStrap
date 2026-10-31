@@ -313,7 +313,7 @@ on the `PATH`.
 | `Ready(Readiness.Grpc.On(9001))`              | `ready: grpc:9001`, on a service, worker or stateful component  |
 | `Ready(Readiness.Command("pg_isready"))`      | `ready: [pg_isready]`                                           |
 | `Protocol(GatewayProtocol.Http2)`             | `protocol: http2`                                               |
-| `Authorize(auth, path: "/auth/check", headers: ["x-user"], forward: ["cookie"])` | `authorize: { by: auth, ... }` ([Authorizing requests](protostrap.md#authorizing-requests)) |
+| `Authorize(auth, path: "/auth/check", headers: ["x-user"], forward: ["cookie"], respond: ["set-cookie"])` | `authorize: { by: auth, ... }` ([Authorizing requests](protostrap.md#authorizing-requests)) |
 | `WithDataVolume()`                            | The volume's `path`, stateful only                              |
 | `WithProtoStrapConfig("../config/x", "/etc/x")` | `config: { from: config/x, path: /etc/x }`, and a read-only bind mount under `aspire run` |
 | `OnConfigChange(ConfigChange.Reload)`         | `on_config_change: reload`, or a command with `ConfigChange.Run(...)` |
@@ -739,8 +739,8 @@ jobs:
    every component's tag and every fingerprint, then send `protostrap-deploy <commit>`
    through SSM, as in [Deploy workflow](protostrap.md#deploy-workflow).
 
-It runs on every push to `main` in dev, and in prod in the `prod` GitHub environment after
-approval, one at a time per environment, as in
+It runs on every push to `main`, in the `prod` GitHub environment after approval, one at a
+time per environment, as in
 [Deploy workflow](protostrap.md#deploy-workflow). A push that changes nothing deployable ends
 after `plan`, with nothing to build and no release. Every push still runs `plan`, so a
 component left behind by a failed deploy is picked up by the next one, whatever that push
@@ -822,9 +822,8 @@ version), configured by the same renderer.
 - **Regenerate before committing.** A pre-commit hook runs `aspire do protostrap-spec` when a
   commit touches `apphost/`, any `*.csproj`, or a `Directory.*.props` file, since all of them
   can change the spec. The drift check catches anyone without the hook.
-- **See what a branch would deploy** in its pull request's plan comment, or with
-  `protostrap plan --environment dev`, once developers can read dev's ECR and deploy bucket
-  (see [Changes to ProtoStrap](#changes-to-protostrap)).
+- **See what a branch would deploy** in its pull request's plan comment (see
+  [Changes to ProtoStrap](#changes-to-protostrap)).
 
 
 ## Flows
@@ -904,15 +903,15 @@ This design needs these changes to [How ProtoStrap is built](protostrap.md) and
 11. **A read-only plan role.** `protostrap plan` reads ECR's tags and the deploy bucket. The
     Deploy role can also write releases and send the deploy command, so a pull request can't
     be given it. A GitHub Actions role that only reads, trusted for pull requests, runs the
-    plan. Developers need the same read access in dev to run it on a laptop.
+    plan.
 
 
 ## Open questions
 
 - **One spec, or one per environment.** protostrap.md keeps one spec and puts each account's
-  differences in a small Terraform config. If dev and prod need different pool sizes, the
-  generator could write `protostrap.<environment>.yaml` from `aspire publish -e <environment>`,
-  at the cost of two files to review.
+  differences in a small Terraform config. If two deployed environments need different pool
+  sizes, the generator could write `protostrap.<environment>.yaml` from
+  `aspire publish -e <environment>`, at the cost of two files to review.
 - **Checking secrets.** No role the deploy workflow has may read a secret, so nothing checks
   that every listed key is set before a deploy. A `protostrap check --secrets`, run by
   whoever sets the values, could, with their credentials. If whoever sets a value also

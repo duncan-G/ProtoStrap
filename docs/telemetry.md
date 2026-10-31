@@ -26,7 +26,7 @@ SDK reads.
 | **What**      | What the application emits: its replicas' output, traces and metrics, and the edge's requests | ProtoStrap's own records: the scheduler's decisions, the agents' records, and the scheduler's state |
 | **Where**     | The telemetry replica on data-1: Loki and Tempo in the telemetry bucket, Prometheus on the telemetry volume | The [infra log](protostrap.md#infra-log) in the deploy bucket, and the scheduler's memory |
 | **Read with** | Grafana, at `127.0.0.1:7482` on data-1                                        | The [operator UI](protostrap.md#operator-ui), at `7480` and `7481`        |
-| **Who**       | Developers, in the environments they can sign in to; Platform Admins; Org Admins | Platform Admins and Org Admins                                          |
+| **Who**       | Developers, Platform Admins and Org Admins                                    | Platform Admins and Org Admins                                          |
 
 Neither flows into the other. The infra log never reaches Loki, and Grafana can't see the
 scheduler. Each has its own SSM session document, so the document a person may start
@@ -163,9 +163,10 @@ scripts/telemetry.sh
 Then open `http://localhost:7482`.
 
 - **Who:** the `protostrap-telemetry` session document forwards port 7482 and nothing else.
-  Developers may start it in the environments they can sign in to (`developer_environments`,
-  dev by default), and Platform Admins and Org Admins in every environment. It doesn't let
-  Developers start the operator UI's documents.
+  Developers, Platform Admins and Org Admins may start it in every deployed environment,
+  such as prod, with their sign-in ([People](identity.md#people)). It doesn't let
+  Developers start the operator UI's documents. Locally, Developers read their services'
+  telemetry in Aspire's dashboard ([Local development](#local-development)).
 - **It has no sign-in of its own.** Everyone who reaches it has the same role, Editor, since
   Grafana lets no Viewer explore. They can explore, query and build dashboards, but can't
   change a data source or add a user. Grafana's own database is in the container, not on the

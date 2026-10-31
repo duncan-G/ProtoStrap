@@ -8,7 +8,8 @@
 #             a .NET version. Every image is linux/arm64, for Graviton VMs: buildx runs a
 #             Dockerfile's steps under QEMU, and the SDK cross-builds without it.
 #   release   It copies what VMs need into the account, if it isn't there yet: the
-#             protostrap binary of the release's version, the edge and telemetry images,
+#             protostrap binary of the release's version (which the infra workflow
+#             usually published, so VMs boot with their agent), the edge and telemetry images,
 #             and every stateful component's upstream image, since VMs never pull from
 #             Docker Hub. It writes releases/<commit>.json, sends protostrap-deploy
 #             <commit> to data-1 through SSM, and waits for its result: done, or failed
@@ -166,26 +167,13 @@ jobs:
 
       - uses: docker/setup-buildx-action@v4
 
-      # VMs run the arm64 build of the same source; the runner uses its own.
+      # VMs run the arm64 build of the same source; the runner uses its own. The infra
+      # workflow has usually published this version already.
       - name: The protostrap binary
         env:
           BINARY: ${{ steps.cli.outputs.vm-binary || steps.cli-external.outputs.vm-binary }}
-        run: |
-          set -euo pipefail
-          key="protostrap/$VERSION/protostrap-linux-arm64"
-          if aws s3api head-object --bucket "$DEPLOY_BUCKET" --key "$key" >/dev/null 2>&1; then
-            echo "protostrap $VERSION is in the deploy bucket"
-          else
-            sha256sum "$BINARY" | awk '{print $1}' > protostrap.sha256
-            aws s3 cp --only-show-errors "$BINARY" "s3://$DEPLOY_BUCKET/$key"
-            aws s3 cp --only-show-errors protostrap.sha256 "s3://$DEPLOY_BUCKET/$key.sha256"
-            echo "protostrap $VERSION copied to the deploy bucket"
-          fi
-          # The first release tells new VMs which version to install; after that, data-1
-          # keeps it current.
-          if ! aws s3api head-object --bucket "$DEPLOY_BUCKET" --key protostrap/current >/dev/null 2>&1; then
-            echo "$VERSION" | aws s3 cp - "s3://$DEPLOY_BUCKET/protostrap/current"
-          fi
+          SOURCE: ${{ steps.source.outputs.dir }}
+        run: '"$SOURCE/.github/actions/protostrap/publish.sh" "$BINARY" "$VERSION" "$DEPLOY_BUCKET"'
 
       - name: The edge image
         env:

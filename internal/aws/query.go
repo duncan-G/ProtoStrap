@@ -256,13 +256,15 @@ func (e *EC2) AssociateAddress(ctx context.Context, allocationID, instanceID str
 	}, nil)
 }
 
-// RouteVia points a route table's destination at an instance, creating the route if it
-// doesn't exist.
+// RouteVia points a route table's destination at an instance, replacing the route if it
+// already exists. It creates first because a missing route makes ReplaceRoute fail with
+// the generic InvalidParameterValue, while an existing one makes CreateRoute fail with
+// RouteAlreadyExists.
 func (e *EC2) RouteVia(ctx context.Context, routeTable, cidr, instanceID string) error {
 	params := url.Values{"RouteTableId": {routeTable}, "DestinationCidrBlock": {cidr}, "InstanceId": {instanceID}}
-	err := e.client().call(ctx, "ReplaceRoute", params, nil)
-	if errorCode(err) == "InvalidRoute.NotFound" {
-		return e.client().call(ctx, "CreateRoute", params, nil)
+	err := e.client().call(ctx, "CreateRoute", params, nil)
+	if errorCode(err) == "RouteAlreadyExists" {
+		return e.client().call(ctx, "ReplaceRoute", params, nil)
 	}
 	return err
 }

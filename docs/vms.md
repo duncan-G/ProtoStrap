@@ -29,9 +29,12 @@ Three rules hold throughout:
 | A failed VM     | Replaced by its ASG            | Replaced by its ASG                     | Replaced by its ASG                              | Restarted on new hardware by EC2          |
 | State on the VM | None                           | None                                    | None                                             | On EBS volumes that outlive it            |
 
-Every VM boots from the same ProtoStrap image, which has Docker, the ECR credential helper,
-the SSM Agent and the ProtoStrap agent, and learns its pool when it launches. A new image is
-built monthly and whenever a security fix lands (see [New images](#new-images)).
+Every VM boots from the same image, Amazon Linux with the SSM Agent, and learns its pool
+when it launches. Its user data installs Docker, the ECR credential helper and the
+ProtoStrap agent, whose binary the infra workflow put in the deploy bucket before the apply
+that made the VM, so every VM boots with its agent. Pool VMs boot the latest Amazon Linux
+each time one launches, and data VMs keep theirs until they are replaced (see
+[New images](#new-images)).
 
 Every instance type is Graviton (arm64), which costs less than x86 for the same shape, and
 every image is built for arm64. Any Graviton type will do, from the burstable t4g up, so a
@@ -315,7 +318,8 @@ stepping in:
 
 1. **The ingress VM starts,** or its ASG replaces it, and takes over its zone. Until then
    the other VMs can reach only S3.
-2. **data-1 starts,** or EC2 recovers it. The swarm comes back from its volume, and the
+2. **data-1 starts,** or EC2 recovers it. It mounts its volumes as its volume list in S3
+   says, so it needn't wait for step 1. The swarm comes back from its volume, and the
    scheduler reads its state from S3.
 3. **PostgreSQL and Redis start.**
 4. **Pool VMs come back.** Those that survived rejoin the swarm, and the ASGs replace the

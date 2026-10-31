@@ -1,9 +1,51 @@
-# This is the GitHub Actions Deploy role (docs/identity.md#github-actions-roles). The
-# deploy workflow takes it on to push images, write the release and tell the scheduler to
-# deploy it through SSM. Only runs in the deploy GitHub environment can take it on.
+# This file is the deploy bucket and the GitHub Actions Deploy role
+# (docs/identity.md#github-actions-roles).
 #
-# Its boundary is the Infra boundary, the most any CI role may do; its own policy is far
-# narrower.
+# The deploy bucket holds every release, the protostrap binary of each version, the
+# scheduler's state and certificate, and the reporter's reports. Bootstrap makes it, rather
+# than the platform, so the infra workflow can put the protostrap binary in it before the
+# platform's first apply makes a VM: every VM boots with its agent. The platform sets its
+# lifecycle rules (infra/platform/deploy.tf).
+#
+# The deploy workflow takes on the Deploy role to push images, write the release and tell
+# the scheduler to deploy it through SSM. Only runs in the deploy GitHub environment can
+# take it on. Its boundary is the Infra boundary, the most any CI role may do; its own
+# policy is far narrower.
+
+resource "aws_s3_bucket" "deploy" {
+  bucket = local.deploy_bucket
+}
+
+resource "aws_s3_bucket_versioning" "deploy" {
+  bucket = aws_s3_bucket.deploy.id
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
+resource "aws_s3_bucket_public_access_block" "deploy" {
+  bucket                  = aws_s3_bucket.deploy.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_ownership_controls" "deploy" {
+  bucket = aws_s3_bucket.deploy.id
+  rule {
+    object_ownership = "BucketOwnerEnforced"
+  }
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "deploy" {
+  bucket = aws_s3_bucket.deploy.id
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
+}
 
 data "aws_iam_policy_document" "deploy_trust" {
   statement {

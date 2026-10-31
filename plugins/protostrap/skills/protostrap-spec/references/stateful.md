@@ -69,7 +69,7 @@ both wait for a maintenance window, since they stop what's on the VM.
 | Change                                    | Does                                                                          |
 | ----------------------------------------- | ----------------------------------------------------------------------------- |
 | `image` within a major version, `request`, `env`, `command` | Stops it, then starts the new one: **brief downtime** for everything that uses it |
-| A **major** PostgreSQL version            | The new server can't open the old data. A dump and restore in a maintenance window, rehearsed in dev; tell the user, don't just change the tag |
+| A **major** PostgreSQL version            | The new server can't open the old data. A dump and restore in a maintenance window, rehearsed in the sample's test account or in prod before go-live; tell the user, don't just change the tag |
 | `volume.size`                             | Terraform grows the volume. It can never shrink                               |
 | Its keys                                  | Its `on_secret_change` hook, in `depends_on` order with the connection strings |
 | Moving it to another data VM, or to RDS or ElastiCache | `docs/vms.md#moving-postgresql-and-redis`, protostrap-secrets's "Moving PostgreSQL or Redis to a managed service" |

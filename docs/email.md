@@ -73,8 +73,9 @@ at most 72 hours. Until then, a send fails.
 Set these in the account's platform root ([infra/README.md](../infra/README.md)):
 
 - **`email_domains`** replaces the spec's domains in this account. Two accounts can't send
-  from one domain, since both would write its `bounce.` records, so dev sends from one of
-  its own, such as `dev.shop.example.com`, and lists it in its own Cloudflare zone.
+  from one domain, since both would write its `bounce.` records, so a second deployed
+  environment sends from one of its own, such as `staging.shop.example.com`, and lists it in
+  its own Cloudflare zone.
 - **`email_dmarc`** is the DMARC record to publish at `_dmarc.<domain>`, such as
   `v=DMARC1; p=none; rua=mailto:dmarc@shop.example.com`. A domain has one DMARC record, and
   it may have one already from another mail service, so ProtoStrap publishes none unless
@@ -84,8 +85,8 @@ Set these in the account's platform root ([infra/README.md](../infra/README.md))
   addresses, and at most 200 messages a day. An Org Admin asks AWS to lift that, once per
   account, in the SES console or with
   `aws sesv2 put-account-details --production-access-enabled --mail-type TRANSACTIONAL ...`.
-  AWS reviews the request, which can take a day. Dev can stay in the sandbox and send to
-  verified test addresses.
+  AWS reviews the request, which can take a day. A second deployed environment can stay in
+  the sandbox and send to verified test addresses.
 
 SES's account-level suppression list is on by default, so an address that bounced or
 complained isn't sent to again. ProtoStrap doesn't yet route bounce or complaint events

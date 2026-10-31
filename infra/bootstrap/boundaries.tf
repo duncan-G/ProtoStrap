@@ -5,7 +5,8 @@
 # - The Infra boundary caps the CI roles. It allows building ProtoStrap: its network and
 #   VMs, Auto Scaling, ECR, S3, SQS, SSM documents, CloudWatch, EventBridge and SNS, Data
 #   Lifecycle Manager, AWS Config, and IAM roles under /protostrap/, always with the Role
-#   boundary. It can create secrets but never read or write their values.
+#   boundary. It allows sending SSM commands, for the deploy workflow. It can create
+#   secrets but never read or write their values.
 # - The Role boundary caps every role Infra creates: VM roles and component roles. It
 #   allows running ProtoStrap: pulling images, its buckets and queues, the SSM Agent, Auto
 #   Scaling, CloudWatch, reading secrets and taking on component roles. It allows no IAM
@@ -32,25 +33,30 @@ data "aws_iam_policy_document" "infra_boundary" {
     resources = ["*"]
   }
 
+  # IAM caps a managed policy at 6,144 characters (tests/bootstrap.tftest.hcl), so action
+  # lists here are wildcards, each matching only the actions its comment names. Here
+  # *Document is Create, Delete, Describe, Get and Update (sharing a document is
+  # ModifyDocumentPermission, which isn't allowed), ListDocument* lists documents, their
+  # versions and metadata history, and *Tags* adds, removes and lists tags.
+  #
+  # The deploy workflow's role has this boundary too. It sends the deploy document to
+  # data-1 and follows the command.
   statement {
-    sid    = "SSMDocumentsAndParameters"
+    sid    = "SSMDocumentsParametersAndCommands"
     effect = "Allow"
     actions = [
-      "ssm:CreateDocument",
-      "ssm:UpdateDocument",
+      "ssm:*Document",
       "ssm:UpdateDocumentDefaultVersion",
-      "ssm:DeleteDocument",
-      "ssm:DescribeDocument",
       "ssm:DescribeDocumentPermission",
-      "ssm:GetDocument",
-      "ssm:ListDocuments",
-      "ssm:ListDocumentVersions",
-      "ssm:AddTagsToResource",
-      "ssm:RemoveTagsFromResource",
-      "ssm:ListTagsForResource",
+      "ssm:ListDocument*",
+      "ssm:*Tags*",
       "ssm:GetParameter",
       "ssm:GetParameters",
       "ssm:DescribeParameters",
+      "ssm:SendCommand",
+      "ssm:ListCommand*",
+      "ssm:GetCommandInvocation",
+      "ssm:DescribeInstanceInformation",
     ]
     resources = ["*"]
   }
@@ -99,37 +105,24 @@ data "aws_iam_policy_document" "infra_boundary" {
 
   # The platform verifies the domains the application sends mail from (email.tf). SES names
   # an identity after its domain, so it can't be narrowed to ProtoStrap's own by name.
+  # *EmailIdentity is Create, Delete and Get, and SES v1's VerifyEmailIdentity;
+  # PutEmailIdentity*Attributes sets an identity's DKIM, DKIM signing, MAIL FROM, feedback
+  # and configuration set; *Resource tags, untags and lists tags.
   statement {
-    sid    = "EmailIdentities"
-    effect = "Allow"
-    actions = [
-      "ses:CreateEmailIdentity",
-      "ses:DeleteEmailIdentity",
-      "ses:GetEmailIdentity",
-      "ses:PutEmailIdentityDkimSigningAttributes",
-      "ses:PutEmailIdentityMailFromAttributes",
-      "ses:TagResource",
-      "ses:UntagResource",
-      "ses:ListTagsForResource",
-    ]
+    sid       = "EmailIdentities"
+    effect    = "Allow"
+    actions   = ["ses:*EmailIdentity", "ses:PutEmailIdentity*Attributes", "ses:*Resource"]
     resources = [local.own.email]
   }
 
-  # CI manages only the empty secret shells. Their values are set by an Org Admin.
+  # CI manages only the empty secret shells. Their values are set by an Org Admin. *Secret
+  # is Create, Delete, Describe, Restore, Update, Rotate and CancelRotate, and
+  # NoSecretValues denies Update and Rotate; *ResourcePolicy is Get, Put, Delete and
+  # Validate; *Resource tags and untags.
   statement {
-    sid    = "SecretShells"
-    effect = "Allow"
-    actions = [
-      "secretsmanager:CreateSecret",
-      "secretsmanager:DescribeSecret",
-      "secretsmanager:DeleteSecret",
-      "secretsmanager:RestoreSecret",
-      "secretsmanager:TagResource",
-      "secretsmanager:UntagResource",
-      "secretsmanager:GetResourcePolicy",
-      "secretsmanager:PutResourcePolicy",
-      "secretsmanager:DeleteResourcePolicy",
-    ]
+    sid       = "SecretShells"
+    effect    = "Allow"
+    actions   = ["secretsmanager:*Secret", "secretsmanager:*ResourcePolicy", "secretsmanager:*Resource"]
     resources = [local.own.secrets, local.own.app_secret]
   }
 
@@ -150,35 +143,23 @@ data "aws_iam_policy_document" "infra_boundary" {
   statement {
     sid    = "ProtoStrapRoles"
     effect = "Allow"
+    # *Role is Create, Delete, Get, Pass, Tag, Untag and Update, ListInstanceProfilesForRole,
+    # and the service-linked role actions, whose roles live outside /protostrap/.
+    # *RolePolicy is Put, Get, Delete, Attach and Detach, and UpdateAssumeRolePolicy.
     actions = [
-      "iam:CreateRole",
-      "iam:DeleteRole",
-      "iam:UpdateRole",
+      "iam:*Role",
+      "iam:*RolePolicy",
       "iam:UpdateRoleDescription",
-      "iam:UpdateAssumeRolePolicy",
-      "iam:TagRole",
-      "iam:UntagRole",
-      "iam:PutRolePolicy",
-      "iam:DeleteRolePolicy",
-      "iam:AttachRolePolicy",
-      "iam:DetachRolePolicy",
       "iam:PutRolePermissionsBoundary",
-      "iam:PassRole",
     ]
     resources = [local.own.roles]
   }
 
+  # *InstanceProfile is Create, Delete, Get, Tag, Untag, AddRoleTo and RemoveRoleFrom.
   statement {
-    sid    = "ProtoStrapInstanceProfiles"
-    effect = "Allow"
-    actions = [
-      "iam:CreateInstanceProfile",
-      "iam:DeleteInstanceProfile",
-      "iam:TagInstanceProfile",
-      "iam:UntagInstanceProfile",
-      "iam:AddRoleToInstanceProfile",
-      "iam:RemoveRoleFromInstanceProfile",
-    ]
+    sid       = "ProtoStrapInstanceProfiles"
+    effect    = "Allow"
+    actions   = ["iam:*InstanceProfile"]
     resources = [local.own.profiles]
   }
 
@@ -313,18 +294,11 @@ data "aws_iam_policy_document" "infra_boundary" {
     resources = ["*"]
   }
 
+  # This also denies reading the provider, which no CI role needs.
   statement {
-    sid    = "NoChangingGitHubsProvider"
-    effect = "Deny"
-    actions = [
-      "iam:CreateOpenIDConnectProvider",
-      "iam:DeleteOpenIDConnectProvider",
-      "iam:UpdateOpenIDConnectProviderThumbprint",
-      "iam:AddClientIDToOpenIDConnectProvider",
-      "iam:RemoveClientIDFromOpenIDConnectProvider",
-      "iam:TagOpenIDConnectProvider",
-      "iam:UntagOpenIDConnectProvider",
-    ]
+    sid       = "NoChangingGitHubsProvider"
+    effect    = "Deny"
+    actions   = ["iam:*OpenIDConnectProvider*"]
     resources = ["*"]
   }
 

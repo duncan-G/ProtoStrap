@@ -42,6 +42,33 @@ public class AuthorizeTests
     }
 
     [Fact]
+    public async Task TheAuthorizersAnswerCanReachTheClient()
+    {
+        // A 2xx can carry headers back to the client too, such as a cookie the authorizer
+        // renewed with the session.
+        using var repo = new FixtureRepo();
+        var builder = TestApp.Publish(repo);
+        builder.AddEnvironment().WithHost("app", "protofast.dev", local: "app.localhost");
+        var auth = AddAuth(builder, repo);
+        builder.AddProject("api", repo.Project("services/api/Api.csproj", "Microsoft.NET.Sdk.Web"))
+            .PublishAsProtoStrapService(s => s
+                .Request(cpu: "500m", memory: "512Mi")
+                .Ready(Readiness.Grpc)
+                .Routes("app/api/")
+                .Authorize(auth, path: "/auth/check", headers: ["x-identity"], forward: ["cookie"], respond: ["set-cookie"]));
+        builder.AddProject("web", repo.Project("services/web/Web.csproj", "Microsoft.NET.Sdk.Web"))
+            .WithHttpEndpoint(targetPort: 4000, name: "http")
+            .WithHttpHealthCheck("/healthz")
+            .PublishAsProtoStrapService(s => s.Request(cpu: "250m", memory: "256Mi").Routes("app/").Authorize(auth, respond: []));
+
+        var yaml = await TestApp.GenerateYamlAsync(builder);
+
+        Assert.Contains("\n  authorize: { by: auth, path: /auth/check, headers: [x-identity], forward: [cookie], respond: [set-cookie] }\n", SpecText.Component(yaml, "api"));
+        // Nothing to respond with is no respond.
+        Assert.Contains("\n  authorize: { by: auth }\n", SpecText.Component(yaml, "web"));
+    }
+
+    [Fact]
     public async Task ThePathDefaultsToTheRequestsOwn()
     {
         using var repo = new FixtureRepo();
@@ -69,7 +96,7 @@ public class AuthorizeTests
         var smtp = builder.AddContainer("smtp4dev", "rnwood/smtp4dev", "3.8").ExcludeFromManifest();
         builder.AddProject("api", repo.Project("services/api/Api.csproj", "Microsoft.NET.Sdk.Web"))
             .PublishAsProtoStrapService(s => s.Request(cpu: "500m", memory: "512Mi").Ready(Readiness.Grpc)
-                .Authorize(auth, path: "check", headers: ["X Identity"], forward: ["host"]));
+                .Authorize(auth, path: "check", headers: ["X Identity"], forward: ["host"], respond: [":status", "content-length", "connection"]));
         builder.AddProject("web", repo.Project("services/web/Web.csproj", "Microsoft.NET.Sdk.Web"))
             .WithHttpEndpoint(targetPort: 4000, name: "http")
             .WithHttpHealthCheck("/healthz")
@@ -85,6 +112,11 @@ public class AuthorizeTests
         Assert.Contains("api: Authorize: path \"check\" must start with /", problems);
         Assert.Contains("api: Authorize: \"X Identity\" isn't a header name: lower case, such as x-user", problems);
         Assert.Contains("api: Authorize: the edge sets host itself", problems);
+        // respond can't hand the client a status, or what frames the response on the edge's own
+        // connection to it.
+        Assert.Contains("api: Authorize: \":status\" isn't a header name: lower case, such as x-user", problems);
+        Assert.Contains("api: Authorize: the edge sets content-length itself", problems);
+        Assert.Contains("api: Authorize: the edge sets connection itself", problems);
         Assert.Contains("web: Authorize: redis is a stateful component: only a service answers the edge", problems);
         Assert.Contains("admin: Authorize: smtp4dev is excluded from publish", problems);
     }

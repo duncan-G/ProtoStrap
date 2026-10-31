@@ -60,6 +60,9 @@ type Authorize struct {
 	Headers []string `json:"headers,omitempty"`
 	// Forward are the request's headers sent to the authorizer, besides Authorization.
 	Forward []string `json:"forward,omitempty"`
+	// Respond are the authorizer's response headers added to the service's response when
+	// it lets the request through, each value a header of its own.
+	Respond []string `json:"respond,omitempty"`
 }
 
 // EnvoyImage is the Envoy the edge runs, which `aspire run` runs as the local edge too.
@@ -200,9 +203,16 @@ func authzFilters(services []Service) []any {
 				port = by.Port
 			}
 		}
+		response := obj{"allowed_upstream_headers": patterns(a.Headers)}
+		if len(a.Respond) > 0 {
+			// Envoy appends these to the service's response, one header for each of the
+			// authorizer's, so each Set-Cookie stays its own. A refusal is the client's
+			// response as it is, headers and all.
+			response["allowed_client_headers_on_success"] = patterns(a.Respond)
+		}
 		httpService := obj{
 			"server_uri":             obj{"uri": fmt.Sprintf("http://%s:%d", a.By, port), "cluster": a.By, "timeout": "2s"},
-			"authorization_response": obj{"allowed_upstream_headers": patterns(a.Headers)},
+			"authorization_response": response,
 		}
 		if p := strings.TrimSuffix(a.Path, "/"); p != "" {
 			httpService["path_prefix"] = p

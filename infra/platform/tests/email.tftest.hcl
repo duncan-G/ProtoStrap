@@ -76,7 +76,7 @@ mock_provider "cloudflare" {
 mock_provider "random" {}
 
 variables {
-  environment           = "dev"
+  environment           = "staging"
   hosts                 = null
   cloudflare_account_id = "0123456789abcdef0123456789abcdef"
   cloudflare_zone       = "example.com"
@@ -194,12 +194,12 @@ run "domains_of_the_account" {
   command = apply
 
   variables {
-    email_domains = ["dev.example.com"]
+    email_domains = ["staging.example.com"]
   }
 
   assert {
-    condition = (toset(keys(aws_sesv2_email_identity.app)) == toset(["dev.example.com"]) &&
-    jsonencode(flatten([for st in data.aws_iam_policy_document.component["web"].statement : [for c in st.condition : c.values if c.variable == "ses:FromAddress"] if st.sid == "Email"])) == jsonencode(["*@dev.example.com"]))
+    condition = (toset(keys(aws_sesv2_email_identity.app)) == toset(["staging.example.com"]) &&
+    jsonencode(flatten([for st in data.aws_iam_policy_document.component["web"].statement : [for c in st.condition : c.values if c.variable == "ses:FromAddress"] if st.sid == "Email"])) == jsonencode(["*@staging.example.com"]))
     error_message = "email_domains replaces the spec's domains in this account."
   }
 }

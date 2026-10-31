@@ -5,10 +5,10 @@ description: Send logs, traces and metrics from an application deployed with Pro
 
 # Telemetry
 
-Every environment runs one telemetry replica on data-1: an OpenTelemetry collector, Loki for
-logs, Tempo for traces, Prometheus for metrics, and Grafana to read them. A service needs no
-ProtoStrap code for it: its stdout is collected, and OpenTelemetry's SDKs find the collector
-in variables ProtoStrap sets.
+Every deployed environment runs one telemetry replica on data-1: an OpenTelemetry collector,
+Loki for logs, Tempo for traces, Prometheus for metrics, and Grafana to read them. A service
+needs no ProtoStrap code for it: its stdout is collected, and OpenTelemetry's SDKs find the
+collector in variables ProtoStrap sets.
 
 The design is `docs/telemetry.md` at the spec's `protostrap:` version
 (`.protostrap/docs/telemetry.md` or `../ProtoStrap/docs/telemetry.md` if checked out at
@@ -127,8 +127,9 @@ Two ways in. Both land in Prometheus, but **only one drives scaling**:
 
 ## Checking it arrives
 
-After the change reaches dev, through Grafana's forward (protostrap-operate says how to open
-it), with `curl -sG` and `--data-urlencode`:
+Locally, in `aspire run`'s dashboard, which shows one run's logs, traces and metrics. In
+prod, through Grafana's forward (protostrap-operate says how to open it; Developers open it
+with their own sign-in), with `curl -sG` and `--data-urlencode`:
 
 | Check                    | Query                                                                                       |
 | ------------------------ | ------------------------------------------------------------------------------------------- |
@@ -137,8 +138,7 @@ it), with `curl -sG` and `--data-urlencode`:
 | Its own metric is there  | Prometheus `count by (__name__) ({service_name="api"})`, and look for the name             |
 | Its scale metric is read | The operator UI's `/api/status`: the component's signal has a reading (Platform or Org Admins) |
 
-`http://localhost:7482/protostrap/help` describes every call. Locally, Aspire's dashboard
-shows the same telemetry for one run.
+`http://localhost:7482/protostrap/help` describes every call.
 
 ## Telemetry from browsers
 

@@ -1,8 +1,12 @@
 # The infra workflow (docs/protostrap.md#infra-workflow) runs Terraform for one account's
-# platform root, such as sample/infra/dev, with the Infra role. It runs in the account's
+# platform root, such as sample/infra/test, with the Infra role. It runs in the account's
 # infra GitHub environment, <environment>-infra, which bootstrap created with everything
 # the root needs: AWS_ROLE_ARN, the state bucket, and the root's inputs as TF_VAR_*
 # variables. Required reviewers on that environment gate every change.
+#
+# Before an apply it publishes the protostrap binary of the version the spec's releases run
+# to the deploy bucket, which bootstrap made, so every VM the apply makes boots with its
+# agent.
 #
 # After a successful apply it records the hash of the spec's infra projection, as
 # infra/<environment>.sha256 in the deploy bucket, so a deploy only waits for infra when
@@ -13,11 +17,11 @@ on:
   workflow_call:
     inputs:
       environment:
-        description: The environment, such as dev. The job runs in <environment>-infra.
+        description: The environment, such as prod. The job runs in <environment>-infra.
         type: string
         required: true
       directory:
-        description: The account's Terraform root, such as infra/dev.
+        description: The account's Terraform root, such as infra/prod.
         type: string
         required: true
       spec:
@@ -38,6 +42,10 @@ on:
         description: The ProtoStrap version to build the CLI from. Empty uses this repository, which is ProtoStrap itself.
         type: string
         default: ""
+      dev-version:
+        description: Version ProtoStrap itself by its source, as plan.yml's dev-version does. Set it where the releases set it.
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -66,6 +74,9 @@ jobs:
           ref: ${{ inputs.protostrap-ref }}
           path: .protostrap
 
+      - id: source
+        run: echo "dir=${{ inputs.protostrap-ref != '' && '.protostrap' || '.' }}" >> "$GITHUB_OUTPUT"
+
       - uses: ./.github/actions/protostrap
         if: inputs.protostrap-ref == ''
 
@@ -77,24 +88,59 @@ jobs:
       - name: Check the spec
         run: protostrap check --spec "${{ inputs.spec }}"
 
+      # An apply may make VMs, and each boots with the agent of the version the spec's
+      # releases run: its binary, built for linux/arm64 and stamped with that version, goes
+      # to the deploy bucket first.
+      - id: version
+        if: inputs.action == 'apply'
+        env:
+          SOURCE: ${{ steps.source.outputs.dir }}
+        run: echo "version=$("$SOURCE/.github/actions/protostrap/version.sh" "${{ inputs.spec }}" "$SOURCE" "${{ inputs.dev-version }}")" >> "$GITHUB_OUTPUT"
+
+      - id: vm
+        uses: ./.github/actions/protostrap
+        if: inputs.action == 'apply' && inputs.protostrap-ref == ''
+        with:
+          version: ${{ steps.version.outputs.version }}
+
+      - id: vm-external
+        uses: ./.protostrap/.github/actions/protostrap
+        if: inputs.action == 'apply' && inputs.protostrap-ref != ''
+        with:
+          source: .protostrap
+          version: ${{ steps.version.outputs.version }}
+
       - uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
+
+      - name: The protostrap binary
+        if: inputs.action == 'apply'
+        env:
+          BINARY: ${{ steps.vm.outputs.vm-binary || steps.vm-external.outputs.vm-binary }}
+          VERSION: ${{ steps.version.outputs.version }}
+          DEPLOY_BUCKET: ${{ vars.PROTOSTRAP_DEPLOY_BUCKET }}
+          SOURCE: ${{ steps.source.outputs.dir }}
+        run: '"$SOURCE/.github/actions/protostrap/publish.sh" "$BINARY" "$VERSION" "$DEPLOY_BUCKET"'
 
       - uses: hashicorp/setup-terraform@v4
         with:
           terraform_version: ${{ inputs.terraform-version }}
           terraform_wrapper: false
 
-      # The root's inputs are the environment's TF_VAR_* variables.
+      # The root's inputs are the environment's TF_VAR_* variables. GitHub stores a
+      # variable's name in uppercase whatever it was set as, and Terraform matches
+      # TF_VAR_<name> exactly, so each name is lowercased after TF_VAR_: a root's variables
+      # are lowercase.
       - name: Inputs
         env:
           VARS: ${{ toJSON(vars) }}
         run: |
           set -euo pipefail
-          jq -r 'to_entries[] | select(.key | startswith("TF_VAR_")) | "\(.key)<<PROTOSTRAP_EOF\n\(.value)\nPROTOSTRAP_EOF"' <<<"$VARS" >> "$GITHUB_ENV"
-          jq -r 'keys[] | select(startswith("TF_VAR_"))' <<<"$VARS"
+          inputs='to_entries[] | select(.key | startswith("TF_VAR_")) | .key |= "TF_VAR_" + (ltrimstr("TF_VAR_") | ascii_downcase)'
+          jq -r "$inputs"' | "\(.key)<<PROTOSTRAP_EOF\n\(.value)\nPROTOSTRAP_EOF"' <<<"$VARS" >> "$GITHUB_ENV"
+          jq -r "$inputs"' | .key' <<<"$VARS"
 
       - name: Init
         working-directory: ${{ inputs.directory }}

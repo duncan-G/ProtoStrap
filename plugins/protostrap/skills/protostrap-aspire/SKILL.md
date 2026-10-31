@@ -135,7 +135,7 @@ builder.AddProject<Projects.Shop_OrdersWorker>("orders-worker")
 | `WithHttpHealthCheck("/healthz")`             | `ready: /healthz`, or `9000/healthz` on another endpoint     |
 | `.Ready(Readiness.Grpc.On(9001))`, `Readiness.Tcp`, `Readiness.Command(...)` | `ready: grpc:9001`, `tcp`, `[...]`; workers and stateful too |
 | `.Protocol(GatewayProtocol.Http2)`            | `protocol: http2`                                            |
-| `.Authorize(auth, path: "/auth/check", headers: ["x-user"], forward: ["cookie"])` | `authorize`: the edge asks `auth` about each request first |
+| `.Authorize(auth, path: "/auth/check", headers: ["x-user"], forward: ["cookie"], respond: ["set-cookie"])` | `authorize`: the edge asks `auth` about each request first |
 | `.WithProtoStrapSources(":(glob)protos/**")`  | More `sources`, for inputs MSBuild can't see                 |
 | `.WithProtoStrapConfig("../config/x", "/etc/x")` | `config`: files it reloads, a read-only bind mount under `aspire run` |
 | `.OnConfigChange(ConfigChange.Reload)` or `ConfigChange.Run(...)` | `on_config_change`                         |

@@ -5,9 +5,9 @@ description: Add, name, share, set or rotate a secret in an application deployed
 
 # Secrets
 
-Each environment has one Secrets Manager secret, `<app>/<environment>` (such as `shop/prod`),
-a JSON object of every component's keys. Terraform creates it empty; **an Org Admin sets the
-values**, so no value passes through Terraform, CI, an image, or you.
+Each deployed environment has one Secrets Manager secret, `<app>/<environment>` (such as
+`shop/prod`), a JSON object of every component's keys. Terraform creates it empty; **an Org
+Admin sets the values**, so no value passes through Terraform, CI, an image, or you.
 
 The design is `docs/secrets.md` at the spec's `protostrap:` version.
 
@@ -50,11 +50,7 @@ The design is `docs/secrets.md` at the spec's `protostrap:` version.
    checks the names, and `secret_files` writes only listed keys.
 3. **The value is set before the release that reads it.** A release whose new replicas
    can't find a key they need leaves them unready, and that release rolls back. Hand the Org
-   Admin the command for each environment:
-
-   ```bash
-   scripts/set-secret.sh shop/dev Api_Stripe__ApiKey=-
-   ```
+   Admin the command for each deployed environment:
 
    ```bash
    scripts/set-secret.sh shop/prod Api_Stripe__ApiKey=-
@@ -62,6 +58,10 @@ The design is `docs/secrets.md` at the spec's `protostrap:` version.
 
    `scripts/set-secret.sh` is in ProtoStrap, at the spec's version (`.protostrap/scripts/` or
    `../ProtoStrap/scripts/`). `-KEY` removes a key. Say this ordering in the pull request.
+   Dev is the local run: its secret, `shop/dev`, sits in the application's one account beside
+   `shop/prod`, and Developers set it with their own sign-in. They can't read `shop/prod`:
+   the platform tags it. No Terraform makes `shop/dev`, so it is made once with
+   `aws secretsmanager create-secret --name shop/dev` before `scripts/set-secret.sh` fills it.
 
 ## Images that can't read Secrets Manager
 

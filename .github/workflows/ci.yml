@@ -53,11 +53,19 @@ jobs:
       - name: Validate
         run: |
           set -euo pipefail
-          for dir in infra/bootstrap infra/platform infra/people sample/infra/bootstrap sample/infra/dev; do
+          for dir in infra/bootstrap infra/platform infra/people sample/infra/bootstrap sample/infra/test; do
             echo "::group::$dir"
             terraform -chdir="$dir" init -backend=false -input=false
             terraform -chdir="$dir" validate
             echo "::endgroup::"
           done
-      - name: Test the platform with mocked providers
-        run: terraform -chdir=infra/platform test
+      # bootstrap renders its policies with the real AWS provider, offline; people and the
+      # platform use mocked providers.
+      - name: Test the Terraform modules
+        run: |
+          set -euo pipefail
+          for dir in infra/bootstrap infra/people infra/platform; do
+            echo "::group::$dir"
+            terraform -chdir="$dir" test
+            echo "::endgroup::"
+          done

@@ -10,7 +10,7 @@
 # line.
 #
 # Usage:
-#   scripts/set-edge-token.sh <app> <environment>        # For example, pass "sample dev".
+#   scripts/set-edge-token.sh <app> <environment>        # For example, pass "sample test".
 #
 # Set CLOUDFLARE_ACCOUNT_ID to the Cloudflare account the tunnel is in, and
 # CLOUDFLARE_API_TOKEN to an API token with Account > Cloudflare Tunnel > Edit (the token
@@ -21,7 +21,7 @@
 set -euo pipefail
 
 if [[ $# -ne 2 ]]; then
-  echo "usage: scripts/set-edge-token.sh <app> <environment>    # e.g. sample dev" >&2
+  echo "usage: scripts/set-edge-token.sh <app> <environment>    # e.g. sample test" >&2
   exit 2
 fi
 app=$1 environment=$2

@@ -838,6 +838,15 @@ internal sealed partial class SpecGenerator(
                 or "x-forwarded-for" or "x-forwarded-proto" or "x-request-id" or "x-envoy-original-path")
                 Fail($"the edge sets {header} itself");
         }
+        // The edge frames the service's response on its own connection to the client: the
+        // authorizer's content-length is its own body's, and HTTP/2 refuses a connection's headers.
+        foreach (var header in authorize.Respond)
+        {
+            if (!HeaderName().IsMatch(header))
+                Fail($"\"{header}\" isn't a header name: lower case, such as x-user");
+            else if (header is "content-length" or "transfer-encoding" or "connection" or "keep-alive" or "proxy-connection" or "te" or "upgrade")
+                Fail($"the edge sets {header} itself");
+        }
         if (!ok)
             return null;
         var map = new YamlMap { ["by"] = by.Name };
@@ -847,6 +856,8 @@ internal sealed partial class SpecGenerator(
             map["headers"] = Seq(authorize.Headers);
         if (authorize.Forward.Count > 0)
             map["forward"] = Seq(authorize.Forward);
+        if (authorize.Respond.Count > 0)
+            map["respond"] = Seq(authorize.Respond);
         return map;
     }
 

@@ -1,6 +1,6 @@
-# This root bootstraps the sample's dev account with infra/bootstrap, which makes the state
-# bucket, GitHub's OpenID Connect provider, the Infra and Deploy roles, their boundaries,
-# and the two GitHub environments the workflows run in. An Org Admin applies it once, from
+# This root bootstraps the sample's test account with infra/bootstrap, which makes the state
+# and deploy buckets, GitHub's OpenID Connect provider, the Infra and Deploy roles, their
+# boundaries, and the two GitHub environments the workflows run in. An Org Admin applies it once, from
 # their own machine, with admin credentials for the account (see sample/README.md):
 #
 #   cp terraform.tfvars.example terraform.tfvars    # Then fill it in.
@@ -37,7 +37,7 @@ variable "region" {
 
 variable "environment" {
   type    = string
-  default = "dev"
+  default = "test"
 }
 
 variable "github_repository" {
@@ -55,12 +55,12 @@ variable "cloudflare_zone" {
 }
 
 variable "hosts" {
-  description = "The hostname of each of the spec's hosts in this account, such as { sample = \"sample-dev.example.com\" }."
+  description = "The hostname of each of the spec's hosts in this account, such as { sample = \"sample-test.example.com\" }."
   type        = map(string)
 }
 
 variable "cloudflare_api_token" {
-  description = "A Cloudflare API token for the infra workflow (see sample/README.md for its permissions). Empty: set it yourself with `gh secret set CLOUDFLARE_API_TOKEN --env dev-infra`."
+  description = "A Cloudflare API token for the infra workflow (see sample/README.md for its permissions). Empty: set it yourself with `gh secret set CLOUDFLARE_API_TOKEN --env test-infra`."
   type        = string
   default     = ""
   sensitive   = true
@@ -89,7 +89,7 @@ module "bootstrap" {
   environment       = var.environment
   github_repository = var.github_repository
 
-  # These are the platform root's inputs in this account (sample/infra/dev), set as
+  # These are the platform root's inputs in this account (sample/infra/test), set as
   # TF_VAR_* variables of the infra GitHub environment.
   infra_variables = {
     cloudflare_account_id = var.cloudflare_account_id

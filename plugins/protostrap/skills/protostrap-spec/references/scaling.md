@@ -46,8 +46,8 @@ Use a limit when more replicas would add errors, not throughput:
 
 ## Sizing a request
 
-1. Run the component under realistic load (locally, or in dev with the sample's load
-   generator) and read its steady CPU and peak memory.
+1. Run the component under realistic load (locally, or in prod before it serves anyone,
+   with the sample's load generator) and read its steady CPU and peak memory.
 2. **Memory:** peak plus about 25%. It is a hard limit: over it, the replica is killed.
 3. **CPU:** for a CPU-scaled service, the steady use of one replica at the load you want it
    to carry, divided by the `cpu:` target. For single-threaded runtimes, at most one core.

@@ -1,5 +1,5 @@
 variable "environment" {
-  description = "The environment this AWS account runs, such as dev or prod. Names the GitHub environments the workflows run in."
+  description = "The environment this AWS account runs, such as prod. Names the GitHub environments the workflows run in."
   type        = string
 
   validation {
@@ -29,7 +29,7 @@ variable "github_repository" {
 }
 
 variable "github_deploy_environment" {
-  description = "GitHub environment the deploy workflow runs in. Empty: the environment's name, such as dev."
+  description = "GitHub environment the deploy workflow runs in. Empty: the environment's name, such as prod."
   type        = string
   default     = ""
 }
@@ -53,9 +53,14 @@ variable "create_github_oidc_provider" {
 }
 
 variable "infra_variables" {
-  description = "Inputs to the platform's Terraform root that differ per account but aren't secret, such as cloudflare_account_id, cloudflare_zone or hosts (as JSON). Each becomes a TF_VAR_<name> variable in the infra GitHub environment."
+  description = "Inputs to the platform's Terraform root that differ per account but aren't secret, such as cloudflare_account_id, cloudflare_zone or hosts (as JSON). Each becomes a TF_VAR_<name> variable in the infra GitHub environment. GitHub uppercases variable names and the infra workflow lowercases them again, so names must be the root's lowercase variable names."
   type        = map(string)
   default     = {}
+
+  validation {
+    condition     = alltrue([for name in keys(var.infra_variables) : can(regex("^[a-z0-9_]+$", name))])
+    error_message = "infra_variables' names must be the root's variable names, in lowercase: GitHub uppercases variable names, and the infra workflow lowercases them again."
+  }
 }
 
 variable "infra_secrets" {

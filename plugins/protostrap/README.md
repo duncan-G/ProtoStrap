@@ -9,12 +9,12 @@ say what they will restart or provision.
 
 | Skill                                                        | For                                                                                    |
 | ------------------------------------------------------------ | -------------------------------------------------------------------------------------- |
-| [`protostrap-setup`](skills/protostrap-setup/SKILL.md)       | Adding ProtoStrap to a repository, adding an environment such as prod, upgrading ProtoStrap |
+| [`protostrap-setup`](skills/protostrap-setup/SKILL.md)       | Adding ProtoStrap to a repository, adding a deployed environment such as prod, upgrading ProtoStrap |
 | [`protostrap-spec`](skills/protostrap-spec/SKILL.md)         | Writing and changing `protostrap.yaml`: kinds, sources, requests, routes, queues, buckets, scaling, config files and configure tasks, stateful components and their backups |
 | [`protostrap-aspire`](skills/protostrap-aspire/SKILL.md)     | Describing the application in an Aspire AppHost with ProtoStrap.Hosting, and generating the spec |
 | [`protostrap-contract`](skills/protostrap-contract/SKILL.md) | Service, worker and task code: keys, readiness, draining, jobs, uploads, what the request path can't carry, scheduled work, migrations, configure tasks, for .NET, Node.js and Python |
 | [`protostrap-telemetry`](skills/protostrap-telemetry/SKILL.md) | Logs, traces and metrics from code: OpenTelemetry for .NET (ServiceDefaults included), Node.js and Python, one log path, traces through queues, metrics for scaling, the spec's `telemetry` section |
-| [`protostrap-deploy`](skills/protostrap-deploy/SKILL.md)     | Shipping a change: what comes before merging, what the workflow does in dev and prod, watching the run, confirming the release serves |
+| [`protostrap-deploy`](skills/protostrap-deploy/SKILL.md)     | Shipping a change: what comes before merging, what the workflow does from approval to prod, watching the run, confirming the release serves |
 | [`protostrap-secrets`](skills/protostrap-secrets/SKILL.md)   | Naming, adding and rotating keys in the environment's secret, without the agent handling a value |
 | [`protostrap-operate`](skills/protostrap-operate/SKILL.md)   | Finding out why a deployment behaves as it does, read-only, through the operator API and Grafana, and fixing it through the repository |
 | [`protostrap-email`](skills/protostrap-email/SKILL.md)       | Sending mail with SES: the spec's `email`, sending from code with the component's role, Keycloak, local runs, production access |
@@ -93,9 +93,9 @@ request. The skill for each:
 | `docs/protostrap.md#application-contract`, `internal/edge`, `internal/probe`, the sample services | `protostrap-contract` and its references |
 | `hosting/`, `docs/protostrap-aspire.md`                      | `protostrap-aspire`                                      |
 | `docs/secrets.md`, `internal/secret`, `scripts/set-secret.sh` | `protostrap-secrets`                                    |
-| `.github/workflows/{plan,infra,deploy}.yml`, `infra/*/variables.tf`, `docs/production.md` | `protostrap-setup` and its templates, `protostrap-deploy` |
+| `.github/workflows/{plan,infra,deploy}.yml`, `infra/*/variables.tf`, `infra/people/main.tf`'s variables, `docs/production.md` | `protostrap-setup` and its templates, `protostrap-deploy` |
 | `docs/telemetry.md`, `internal/telemetry`, the `OTEL_` variables the scheduler sets, the sample services' telemetry | `protostrap-telemetry`, and `protostrap-operate`'s Grafana section |
-| `internal/ui`, `scripts/operator-ui.sh`, `scripts/telemetry.sh`, the scheduler's reasons | `protostrap-operate`                 |
+| `internal/ui`, `scripts/operator-ui.sh`, `scripts/telemetry.sh`, `infra/people/main.tf`'s permission sets, the scheduler's reasons | `protostrap-operate` |
 | `cmd/protostrap/deploy.go`, `internal/release`, `docs/protostrap.md#deploy-a-release` | `protostrap-deploy`                          |
 | `docs/email.md`, `internal/spec/email.go`, `infra/platform/email.tf`, `hosting/src/ProtoStrap.Hosting/ProtoStrapEmail.cs` | `protostrap-email` |
 

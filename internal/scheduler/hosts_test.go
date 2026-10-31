@@ -4,13 +4,16 @@ import (
 	"context"
 	"errors"
 	"maps"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/duncan-G/protostrap/internal/api"
+	"github.com/duncan-G/protostrap/internal/edge"
 	"github.com/duncan-G/protostrap/internal/release"
+	"github.com/duncan-G/protostrap/internal/spec"
 )
 
 // hostsSpec is testSpec with two named hosts: the api on the shop host's /api/, and web
@@ -284,16 +287,38 @@ func (s *fakeStore) saved() release.State {
 }
 
 // A service authorized by another reaches the edge with its authorizer, which gets a
-// cluster even when it has no routes of its own.
+// cluster even when it has no routes of its own, and with what of the authorizer's answer
+// goes to the request and what to the client.
 func TestTheEdgeAsksAnAuthorizer(t *testing.T) {
-	sp := strings.Replace(hostsSpec, "    routes: [shop/api/]\n", "    routes: [shop/api/]\n    authorize: { by: web, path: /check, headers: [x-user] }\n", 1)
+	sp := strings.Replace(hostsSpec, "    routes: [shop/api/]\n",
+		"    routes: [shop/api/]\n    authorize: { by: web, path: /check, headers: [x-user], forward: [cookie], respond: [set-cookie] }\n", 1)
 	h := newHarness(t)
 	h.deploy("c1", sp, nil)
 	h.until("the first release finishes", 10*time.Minute, func() bool { return h.rollout("c1") == RolloutDone })
 	lds := h.edgeListener()
-	for _, want := range []string{`"envoy.filters.http.ext_authz/api"`, `"path_prefix": "/check"`, `"exact": "x-user"`} {
+	for _, want := range []string{`"envoy.filters.http.ext_authz/api"`, `"path_prefix": "/check"`, `"exact": "x-user"`, `"exact": "cookie"`,
+		`"allowed_client_headers_on_success"`, `"exact": "set-cookie"`} {
 		if !strings.Contains(lds, want) {
 			t.Errorf("the edge's listener lacks %s", want)
 		}
+	}
+}
+
+// EdgeServices hands the edge each part of a service's authorize as the spec has it.
+func TestEdgeServicesCarryTheAuthorizer(t *testing.T) {
+	sp, err := spec.Parse([]byte(strings.Replace(hostsSpec, "    routes: [shop/api/]\n",
+		"    routes: [shop/api/]\n    authorize: { by: web, headers: [x-user], forward: [cookie], respond: [set-cookie, x-expires] }\n", 1)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var api *edge.Service
+	for _, s := range EdgeServices(sp) {
+		if s.Name == "api" {
+			api = &s
+		}
+	}
+	want := edge.Authorize{By: "web", Path: "/", Headers: []string{"x-user"}, Forward: []string{"cookie"}, Respond: []string{"set-cookie", "x-expires"}}
+	if api == nil || api.Authorize == nil || !reflect.DeepEqual(*api.Authorize, want) {
+		t.Errorf("api reaches the edge as %+v, want authorize %+v", api, want)
 	}
 }

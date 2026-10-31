@@ -5,13 +5,14 @@
 #
 #   Org-Admins       OrgAdmin       AdministratorAccess                          4 hours   every account
 #   Platform-Admins  PlatformAdmin  read-only view, operator UI, Grafana         12 hours  every account
-#   Developers       Developer      read-only view, development secrets, Grafana 12 hours  developer accounts
+#   Developers       Developer      read-only view, dev's secret, Grafana        12 hours  every account
 #
 # Org Admins set the platform's secret values, change boundaries (by applying bootstrap)
 # and handle anything else. Platform Admins watch the platform: they see every account and
 # open the operator UI and Grafana, and change nothing. Developers run services locally,
-# which read development secrets, protostrap-dev/<component>, with the developer's sign-in;
-# their code reaches the platform only through GitHub Actions.
+# which read dev's secret, <app>/dev, with the developer's sign-in: dev is that local run,
+# nothing is deployed for it, and its secret sits in the account beside prod's. Their code
+# reaches the platform only through GitHub Actions.
 #
 # The operator UI (docs/protostrap.md#operator-ui) and Grafana (docs/telemetry.md) are each
 # reached with an SSM port forward to data-1, and the session document a person may start is
@@ -39,19 +40,8 @@ terraform {
 }
 
 variable "accounts" {
-  description = "The AWS accounts ProtoStrap runs in, by environment, such as { dev = \"111111111111\", prod = \"222222222222\" }."
+  description = "The AWS accounts ProtoStrap runs in, by deployed environment, such as { prod = \"222222222222\" }. Dev, the local run, has none: its secret is in prod's."
   type        = map(string)
-}
-
-variable "developer_environments" {
-  description = "The environments Developers can sign in to."
-  type        = list(string)
-  default     = ["dev"]
-
-  validation {
-    condition     = alltrue([for env in var.developer_environments : contains(keys(var.accounts), env)])
-    error_message = "Each of developer_environments must be an environment in accounts."
-  }
 }
 
 variable "groups_from_identity_provider" {
@@ -83,7 +73,7 @@ locals {
   assignments = merge(
     { for env, account in var.accounts : "org_admins/${env}" => { group = "org_admins", set = aws_ssoadmin_permission_set.org_admin.arn, account = account } },
     { for env, account in var.accounts : "platform_admins/${env}" => { group = "platform_admins", set = aws_ssoadmin_permission_set.platform_admin.arn, account = account } },
-    { for env in var.developer_environments : "developers/${env}" => { group = "developers", set = aws_ssoadmin_permission_set.developer.arn, account = var.accounts[env] } },
+    { for env, account in var.accounts : "developers/${env}" => { group = "developers", set = aws_ssoadmin_permission_set.developer.arn, account = account } },
   )
 }
 
@@ -175,7 +165,7 @@ resource "aws_ssoadmin_permission_set_inline_policy" "platform_admin" {
 
 resource "aws_ssoadmin_permission_set" "developer" {
   name             = "Developer"
-  description      = "Read-only view, the development secrets services read when run locally, and Grafana through an SSM port forward to data-1."
+  description      = "Read-only view, dev's secret, which services read when run locally, and Grafana through an SSM port forward to data-1."
   instance_arn     = local.instance
   session_duration = "PT12H"
 }
@@ -193,6 +183,8 @@ resource "aws_ssoadmin_permission_set_inline_policy" "developer" {
     Version = "2012-10-17"
     Statement = [
       {
+        # Dev's secret, <app>/dev, named like every environment's, such as shop/dev. This
+        # root doesn't know the app; a secret's ARN ends in -<6 characters>.
         Sid    = "DevelopmentSecrets"
         Effect = "Allow"
         Action = [
@@ -202,7 +194,7 @@ resource "aws_ssoadmin_permission_set_inline_policy" "developer" {
           "secretsmanager:PutSecretValue",
           "secretsmanager:TagResource",
         ]
-        Resource = "arn:aws:secretsmanager:*:*:secret:protostrap-dev/*"
+        Resource = "arn:aws:secretsmanager:*:*:secret:*/dev-*"
       },
       {
         Sid      = "NotThePlatformsSecrets"
@@ -211,8 +203,8 @@ resource "aws_ssoadmin_permission_set_inline_policy" "developer" {
         Resource = "arn:aws:secretsmanager:*:*:secret:protostrap/*"
       },
       {
-        # The environment's secret, <app>/<environment>, is named for the app, which this
-        # root doesn't know, but it carries the platform's tag.
+        # A deployed environment's secret, such as <app>/prod, is named for the app, which
+        # this root doesn't know, but the platform tags it. Dev's isn't the platform's.
         Sid       = "NotTheEnvironmentsSecret"
         Effect    = "Deny"
         Action    = ["secretsmanager:GetSecretValue", "secretsmanager:PutSecretValue"]

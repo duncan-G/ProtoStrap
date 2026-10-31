@@ -1,5 +1,5 @@
 # This test applies the people root to a mocked provider, to check who gets which
-# permission set where, and who may open the operator UI:
+# permission set where, and who may open the operator UI and Grafana:
 #
 #   terraform -chdir=infra/people init -backend=false && terraform -chdir=infra/people test
 
@@ -30,35 +30,39 @@ override_resource {
   values = { arn = "arn:aws:sso:::permissionSet/ssoins-0123456789abcdef/ps-developer" }
 }
 
+# An application has one account, prod's: dev is the local run, whose secret is there too.
+# A second deployed environment would have its own.
 variables {
-  accounts = { dev = "111111111111", staging = "333333333333", prod = "222222222222" }
+  accounts = { prod = "222222222222", staging = "333333333333" }
 }
 
 run "who_signs_in_where" {
   command = apply
 
   assert {
-    condition = alltrue([for env in ["dev", "staging", "prod"] :
+    condition = alltrue([for env in ["staging", "prod"] :
     aws_ssoadmin_account_assignment.this["org_admins/${env}"].permission_set_arn == aws_ssoadmin_permission_set.org_admin.arn])
     error_message = "Org Admins are OrgAdmin everywhere."
   }
 
   assert {
-    condition = (alltrue([for env in ["dev", "staging", "prod"] :
+    condition = (alltrue([for env in ["staging", "prod"] :
       aws_ssoadmin_account_assignment.this["platform_admins/${env}"].permission_set_arn == aws_ssoadmin_permission_set.platform_admin.arn]) &&
     aws_ssoadmin_account_assignment.this["platform_admins/prod"].target_id == "222222222222")
     error_message = "Platform Admins are PlatformAdmin everywhere, prod included."
   }
 
   assert {
-    condition = (sort([for k, _ in aws_ssoadmin_account_assignment.this : k if startswith(k, "developers/")]) == tolist(["developers/dev"]) &&
-    aws_ssoadmin_account_assignment.this["developers/dev"].permission_set_arn == aws_ssoadmin_permission_set.developer.arn)
-    error_message = "Developers sign in only where they develop, as Developer: they have nothing in staging or prod, the operator UI included."
+    condition = (sort([for k, _ in aws_ssoadmin_account_assignment.this : k if startswith(k, "developers/")]) == tolist(["developers/prod", "developers/staging"]) &&
+      alltrue([for env in ["staging", "prod"] :
+      aws_ssoadmin_account_assignment.this["developers/${env}"].permission_set_arn == aws_ssoadmin_permission_set.developer.arn]) &&
+    aws_ssoadmin_account_assignment.this["developers/prod"].target_id == "222222222222")
+    error_message = "Developers are Developer in every account, prod's included: dev's secret is there, and their services' telemetry."
   }
 
   assert {
     condition     = sort(keys(output.permission_sets)) == tolist(["Developer", "OrgAdmin", "PlatformAdmin"])
-    error_message = "Three permission sets: OperatorUI, the Developers' UI-only set, is gone."
+    error_message = "Three permission sets: OperatorUI, the Developers' UI-only set, is gone, and Developers need no second set for dev."
   }
 
   assert {
@@ -118,15 +122,6 @@ run "platform_admins_open_the_operator_ui" {
 run "developers_open_grafana_and_not_the_operator_ui" {
   command = apply
 
-  variables {
-    developer_environments = ["dev", "staging"]
-  }
-
-  assert {
-    condition     = sort([for k, _ in aws_ssoadmin_account_assignment.this : k if startswith(k, "developers/")]) == tolist(["developers/dev", "developers/staging"])
-    error_message = "Developers sign in to each environment they develop in, and no other."
-  }
-
   assert {
     condition = alltrue([for r in flatten([for s in jsondecode(aws_ssoadmin_permission_set_inline_policy.developer.inline_policy).Statement : s.Resource if contains(s.Action, "ssm:StartSession")]) :
     contains(["arn:aws:ec2:*:*:instance/*", "arn:aws:ssm:*:*:document/protostrap-telemetry"], r)])
@@ -144,16 +139,23 @@ run "developers_open_grafana_and_not_the_operator_ui" {
   assert {
     condition = (sort([for s in jsondecode(aws_ssoadmin_permission_set_inline_policy.developer.inline_policy).Statement : s.Sid]) ==
     tolist(["DevelopmentSecrets", "EndOwnSessions", "FindDataOne", "GrafanaDocument", "GrafanaOnDataOne", "NotTheEnvironmentsSecret", "NotThePlatformsSecrets"]))
-    error_message = "Developer manages development secrets, can't read the platform's, and opens Grafana."
+    error_message = "Developer manages dev's secret, can't read the platform's, and opens Grafana."
   }
 }
 
-run "an_unknown_environment" {
-  command = plan
+# Developers run services locally, which read dev's secret, <app>/dev, with their sign-in.
+# It sits in the same account as prod's, <app>/prod, which they can't read.
+run "developers_manage_devs_secret" {
+  command = apply
 
-  variables {
-    developer_environments = ["qa"]
+  assert {
+    condition     = [for s in jsondecode(aws_ssoadmin_permission_set_inline_policy.developer.inline_policy).Statement : s.Resource if s.Sid == "DevelopmentSecrets"] == ["arn:aws:secretsmanager:*:*:secret:*/dev-*"]
+    error_message = "Developer's secret is dev's, <app>/dev, named like every environment's (an ARN ends in -<6 characters>)."
   }
 
-  expect_failures = [var.developer_environments]
+  assert {
+    condition = (length([for s in jsondecode(aws_ssoadmin_permission_set_inline_policy.developer.inline_policy).Statement : s if s.Sid == "NotTheEnvironmentsSecret" && s.Effect == "Deny" && s.Condition.Null["aws:ResourceTag/protostrap:app"] == "false"]) == 1 &&
+    !contains(flatten([for s in jsondecode(aws_ssoadmin_permission_set_inline_policy.developer.inline_policy).Statement : s.Action if s.Effect == "Allow"]), "secretsmanager:UntagResource"))
+    error_message = "Prod's secret carries the platform's tag, which denies it to Developers, and they can't remove the tag."
+  }
 }

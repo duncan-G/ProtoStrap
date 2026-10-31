@@ -19,7 +19,7 @@ locals {
     app           = local.app
     environment   = var.environment
     region        = local.region
-    deploy_bucket = aws_s3_bucket.deploy.bucket
+    deploy_bucket = data.aws_s3_bucket.deploy.bucket
     files_bucket  = aws_s3_bucket.files.bucket
     registry      = local.registry
     listen        = ":7443"
@@ -54,7 +54,7 @@ resource "aws_iam_role_policy" "data_agent" {
   policy = data.aws_iam_policy_document.agent.json
 }
 
-# This policy lets the agent read and write backups, and find the VM's own volumes to mount.
+# This policy lets the agent read and write backups, and the VM read its volume list.
 data "aws_iam_policy_document" "data_vm" {
   statement {
     sid       = "Backups"
@@ -67,9 +67,9 @@ data "aws_iam_policy_document" "data_vm" {
     resources = [aws_s3_bucket.backups.arn]
   }
   statement {
-    sid       = "FindVolumes"
-    actions   = ["ec2:DescribeVolumes"]
-    resources = ["*"]
+    sid       = "ReadVolumeLists"
+    actions   = ["s3:GetObject"]
+    resources = ["${data.aws_s3_bucket.deploy.arn}/volumes/*"]
   }
 }
 
@@ -103,6 +103,7 @@ resource "aws_instance" "data" {
     swarm_manager    = each.key == "data-1"
     scheduler        = each.key == "data-1"
     volumes_script   = file("${path.module}/templates/protostrap-volumes.sh")
+    volume_list      = "s3://${data.aws_s3_bucket.deploy.bucket}/${aws_s3_object.volumes[each.key].key}"
     scheduler_config = each.key == "data-1" ? local.scheduler_config : ""
     units = merge(local.vm_files.units, {
       "protostrap-volumes.service" = file("${path.module}/templates/protostrap-volumes.service")
@@ -168,6 +169,31 @@ resource "aws_volume_attachment" "control" {
   device_name = "/dev/sdz"
   volume_id   = aws_ebs_volume.control.id
   instance_id = aws_instance.data["data-1"].id
+}
+
+# Each data VM's volume list says which volume to mount where, one "<volume id> <directory>"
+# per line, the directory being the volume's protostrap:mount tag. It lives in the deploy
+# bucket, which a data VM reaches through the S3 gateway endpoint: a data VM mounts its
+# volumes before its zone has a way out to the internet, which the ingress VM provides only
+# once the first deploy has installed its agent. templates/protostrap-volumes.sh reads it
+# every minute, so a new component's volume is mounted soon after it is attached.
+locals {
+  data_volumes = concat(
+    [for name, c in local.stateful : { vm = c.vm, id = aws_ebs_volume.stateful[name].id, dir = aws_ebs_volume.stateful[name].tags["protostrap:mount"] }],
+    [
+      { vm = "data-1", id = aws_ebs_volume.control.id, dir = aws_ebs_volume.control.tags["protostrap:mount"] },
+      { vm = "data-1", id = aws_ebs_volume.telemetry.id, dir = aws_ebs_volume.telemetry.tags["protostrap:mount"] },
+    ],
+  )
+}
+
+resource "aws_s3_object" "volumes" {
+  for_each     = toset(local.data_vms)
+  bucket       = data.aws_s3_bucket.deploy.bucket
+  key          = "volumes/${each.key}"
+  content      = join("", sort([for v in local.data_volumes : "${v.id} ${v.dir}\n" if v.vm == each.key]))
+  content_type = "text/plain"
+  tags         = local.tags
 }
 
 # These alarms handle recovery (docs/vms.md#recovery): EC2 recovers the instance when its

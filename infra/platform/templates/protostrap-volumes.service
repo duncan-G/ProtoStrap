@@ -1,4 +1,4 @@
-# This unit mounts the data VM's EBS volumes, found by their tags (protostrap-volumes.sh).
+# This unit mounts the data VM's EBS volumes, as its volume list says (protostrap-volumes.sh).
 [Unit]
 Description=Mount ProtoStrap's EBS volumes
 After=network-online.target local-fs.target

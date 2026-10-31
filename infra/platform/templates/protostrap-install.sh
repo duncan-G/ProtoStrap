@@ -1,7 +1,8 @@
 #!/bin/bash
 # This script installs the protostrap binary from the deploy bucket: the version named by
-# protostrap/current, checked against its published SHA-256. The deploy workflow puts the
-# first one there, so before the first deploy this script waits. On a pool VM it keeps the
+# protostrap/current, checked against its published SHA-256. The infra workflow puts it
+# there before an apply makes VMs, so the script normally finds it at once. If it isn't
+# there yet, as after an apply run by hand, the script waits, and on a pool VM keeps the
 # launch hook alive meanwhile, so the Auto Scaling group doesn't discard the VM for
 # waiting.
 #

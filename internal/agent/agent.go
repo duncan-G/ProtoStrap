@@ -106,6 +106,9 @@ type Config struct {
 	BackupRetry time.Duration
 	// JoinRetry is the wait between attempts to join the swarm. It defaults to 5s.
 	JoinRetry time.Duration
+	// HookRetry is the wait between attempts to complete the launch hook. It defaults to
+	// 10s.
+	HookRetry time.Duration
 	// SecretHookTimeout is how long a follower's hook has to apply a new version of its
 	// keys. It defaults to 2m.
 	SecretHookTimeout time.Duration
@@ -151,6 +154,7 @@ func (c Config) WithDefaults() Config {
 	setD(&c.SpotWarning, 2*time.Minute)
 	setD(&c.BackupRetry, time.Hour)
 	setD(&c.JoinRetry, 5*time.Second)
+	setD(&c.HookRetry, 10*time.Second)
 	setD(&c.SecretHookTimeout, 2*time.Minute)
 	setD(&c.SecretRetry, time.Minute)
 	setD(&c.ConfigHookTimeout, 2*time.Minute)
@@ -195,7 +199,7 @@ func (c Config) Validate() error {
 	for name, d := range map[string]time.Duration{
 		"sync interval": c.SyncInterval, "ready timeout": c.ReadyTimeout, "silent after": c.SilentAfter,
 		"hook timeout": c.HookTimeout, "drain margin": c.DrainMargin, "spot stop limit": c.SpotStopLimit,
-		"spot warning": c.SpotWarning, "backup retry": c.BackupRetry, "join retry": c.JoinRetry,
+		"spot warning": c.SpotWarning, "backup retry": c.BackupRetry, "join retry": c.JoinRetry, "hook retry": c.HookRetry,
 		"secret hook timeout": c.SecretHookTimeout, "secret retry": c.SecretRetry,
 		"config hook timeout": c.ConfigHookTimeout, "config retry": c.ConfigRetry,
 	} {
@@ -253,6 +257,10 @@ const (
 	HookContinue = "CONTINUE"
 	HookAbandon  = "ABANDON"
 )
+
+// ErrHookDone is what Hooks return, wrapped, when AWS has no such hook in progress for the
+// VM: it was completed before the agent restarted, or it timed out.
+var ErrHookDone = errors.New("no lifecycle action in progress")
 
 // Hooks completes the VM's lifecycle hooks. VMs outside an Auto Scaling group, the data
 // VMs, have none.
@@ -433,6 +441,9 @@ type Agent struct {
 	unrestored map[string]unrestored
 	// configFollows holds each follower's config files, by replica.
 	configFollows map[string]*configFollow
+	// launchHookDone is closed once the agent has stopped trying to complete the launch
+	// hook.
+	launchHookDone chan struct{}
 
 	wg sync.WaitGroup
 }

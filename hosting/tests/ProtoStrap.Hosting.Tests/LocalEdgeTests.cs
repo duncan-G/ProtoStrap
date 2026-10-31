@@ -74,7 +74,7 @@ public class LocalEdgeTests
         builder.AddProject("api", repo.Project("services/api/Api.csproj", "Microsoft.NET.Sdk.Web"))
             .WithHttpEndpoint(name: "http")
             .PublishAsProtoStrapService(s => s.Request(cpu: "500m", memory: "512Mi").Ready(Readiness.Grpc)
-                .Route("app/api/", rate: 50).Authorize(auth, path: "/auth/check", headers: ["x-user"], forward: ["cookie"]));
+                .Route("app/api/", rate: 50).Authorize(auth, path: "/auth/check", headers: ["x-user"], forward: ["cookie"], respond: ["set-cookie"]));
         builder.AddDockerfile("keycloak", "../services/keycloak")
             .WithHttpEndpoint(targetPort: 8080, name: "http")
             .WithHttpEndpoint(targetPort: 9000, name: "management")
@@ -115,6 +115,9 @@ public class LocalEdgeTests
                     ],
                     "forward": [
                       "cookie"
+                    ],
+                    "respond": [
+                      "set-cookie"
                     ]
                   },
                   "address": "host.docker.internal:51234"
@@ -153,6 +156,30 @@ public class LocalEdgeTests
               "local": true
             }
             """, routing);
+    }
+
+    [Fact]
+    public async Task AnAuthorizerWithNothingToRespondWritesNoRespond()
+    {
+        // The routing names only what the AppHost gives, so the edge renders as it did before
+        // respond.
+        using var repo = new FixtureRepo();
+        var builder = TestApp.Run(repo);
+        var protostrap = builder.AddEnvironment().WithHost("app", "protofast.dev", local: "app.dev.localhost");
+        var auth = builder.AddProject("auth", repo.Project("services/auth/Auth.csproj", "Microsoft.NET.Sdk.Web"))
+            .WithHttpEndpoint(name: "http")
+            .WithHttpHealthCheck("/healthz")
+            .PublishAsProtoStrapService(s => s.Request(cpu: "250m", memory: "256Mi"));
+        builder.AddProject("api", repo.Project("services/api/Api.csproj", "Microsoft.NET.Sdk.Web"))
+            .WithHttpEndpoint(name: "http")
+            .PublishAsProtoStrapService(s => s.Request(cpu: "500m", memory: "512Mi").Ready(Readiness.Grpc)
+                .Routes("app/api/").Authorize(auth, headers: ["x-user"], respond: []));
+
+        var routing = await LocalEdge.RoutingAsync(builder.Resources, protostrap.Resource, 10000,
+            (_, _) => Task.FromResult("host.docker.internal:51234"), CancellationToken.None);
+
+        var authorize = JsonDocument.Parse(routing).RootElement.GetProperty("services")[0].GetProperty("authorize");
+        Assert.Equal("""{"by":"auth","headers":["x-user"]}""", JsonSerializer.Serialize(authorize));
     }
 
     [Fact]

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -95,6 +96,31 @@ func TestHooksUseTheConfiguredNames(t *testing.T) {
 	}
 	if strings.Join(forms, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("got\n%s", strings.Join(forms, "\n"))
+	}
+}
+
+// After an agent restart, or once the hook has timed out, AWS has no launch hook in
+// progress for the VM. The agent stops trying then, so the adapter says so.
+func TestHooksReportAHookThatIsDone(t *testing.T) {
+	answer := ""
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(answer))
+	}))
+	defer srv.Close()
+	h := hooks{
+		as:    &aws.AutoScaling{Endpoint: srv.URL, Region: "eu-west-1", Credentials: staticCreds{}},
+		group: "shop-general", launch: "launch-hook", terminate: "terminate-hook", instance: "i-1",
+	}
+	answer = `<ErrorResponse><Error><Type>Sender</Type><Code>ValidationError</Code>` +
+		`<Message>No active Lifecycle Action found with instance ID i-1</Message></Error></ErrorResponse>`
+	if err := h.Complete(t.Context(), agent.LaunchHook, agent.HookContinue); !errors.Is(err, agent.ErrHookDone) {
+		t.Fatalf("no active lifecycle action is ErrHookDone, got %v", err)
+	}
+	answer = `<ErrorResponse><Error><Type>Sender</Type><Code>ValidationError</Code>` +
+		`<Message>1 validation error detected</Message></Error></ErrorResponse>`
+	if err := h.Complete(t.Context(), agent.LaunchHook, agent.HookContinue); err == nil || errors.Is(err, agent.ErrHookDone) {
+		t.Fatalf("another error isn't ErrHookDone, got %v", err)
 	}
 }
 
