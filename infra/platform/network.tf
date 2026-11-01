@@ -270,7 +270,7 @@ resource "aws_vpc_security_group_ingress_rule" "ingress_nat" {
   ip_protocol                  = "tcp"
   from_port                    = 443
   to_port                      = 443
-  description                  = "The other VMs' HTTPS, to forward"
+  description                  = "HTTPS from the other VMs, to forward"
 }
 
 resource "aws_vpc_security_group_ingress_rule" "ingress_nat_extra" {

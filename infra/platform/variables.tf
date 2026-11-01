@@ -159,6 +159,12 @@ variable "extra_egress" {
     cidr        = string
   }))
   default = []
+
+  # AWS's set for security group rule descriptions; 243 leaves room for "To forward: ".
+  validation {
+    condition     = alltrue([for r in var.extra_egress : can(regex("^[a-zA-Z0-9. _:/()#,@\\[\\]+=&;{}!$*-]{0,243}$", r.description))])
+    error_message = "An extra_egress description is at most 243 characters of a-z, A-Z, 0-9, spaces and ._-:/()#,@[]+=&;{}!$* (no apostrophes): AWS rejects anything else only at apply."
+  }
 }
 
 variable "protect_data_vms" {

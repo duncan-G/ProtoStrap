@@ -811,3 +811,36 @@ run "no_cdn" {
     error_message = "Browsers keep what Cloudflare serves for the origin's Cache-Control, not Cloudflare's 4 hours."
   }
 }
+
+# AWS checks security group descriptions only at apply, so a bad one fails mid-apply.
+run "security_group_descriptions" {
+  command = apply
+
+  variables {
+    extra_egress = [{ description = "SMTP submission", protocol = "tcp", port = 587, cidr = "0.0.0.0/0" }]
+  }
+
+  assert {
+    condition = alltrue([for d in concat(
+      [aws_security_group.node.description, aws_security_group.ingress.description, aws_vpc_security_group_ingress_rule.ingress_nat.description],
+      [for r in values(aws_vpc_security_group_ingress_rule.node) : r.description],
+      [for r in values(aws_vpc_security_group_egress_rule.node) : r.description],
+      [aws_vpc_security_group_egress_rule.node_https.description],
+      [for r in values(aws_vpc_security_group_egress_rule.node_managed) : r.description],
+      [for r in values(aws_vpc_security_group_egress_rule.node_extra) : r.description],
+      [for r in values(aws_vpc_security_group_ingress_rule.ingress_nat_extra) : r.description],
+      [for r in values(aws_vpc_security_group_egress_rule.ingress_tunnel) : r.description],
+    ) : can(regex("^[a-zA-Z0-9. _:/()#,@\\[\\]+=&;{}!$*-]{0,255}$", d))])
+    error_message = "Every security group description is in AWS's set: no apostrophes."
+  }
+}
+
+run "extra_egress_description_aws_rejects" {
+  command = plan
+
+  variables {
+    extra_egress = [{ description = "Mailgun's SMTP", protocol = "tcp", port = 587, cidr = "0.0.0.0/0" }]
+  }
+
+  expect_failures = [var.extra_egress]
+}
