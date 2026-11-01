@@ -179,7 +179,7 @@ The application's domain is on Cloudflare, managed by the infra workflow. Cloudf
 - **Authenticates the application's mail,** if it sends any: each email domain's DKIM
   records, and the MX and SPF records of its MAIL FROM domain (see [Email](email.md)).
 - **Caches static assets,** but not API paths, unless the spec's `cdn` cache rules say
-  otherwise. Every byte it doesn't serve from cache is paid for as data out of AWS (see
+  otherwise. Browsers keep what it serves for as long as the origin's `Cache-Control` says. Every byte it doesn't serve from cache is paid for as data out of AWS (see
   [Costs](#costs)).
 
 ### The tunnel

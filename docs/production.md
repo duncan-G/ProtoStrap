@@ -256,8 +256,9 @@ are safe to change later. These are not:
 - **`vpc_cidr`** can't change without rebuilding the network. Pick one that won't overlap
   any network prod may ever connect to.
 - **Volume sizes** in the spec only grow. Size `postgres`'s `volume` for a year of data.
-- **The Cloudflare zone settings** the platform sets, Always Use HTTPS and the minimum TLS
-  version, apply to the whole zone, not just the application's hosts.
+- **The Cloudflare zone settings** the platform sets, Always Use HTTPS, the minimum TLS
+  version and Respect Existing Headers for the browser cache, apply to the whole zone, not
+  just the application's hosts.
 - **Email domains** can't be shared between accounts, since both would write the same
   `bounce.` records: if a second deployed environment sends mail, its root sets
   `email_domains` to a domain of its own, and prod keeps the spec's. Set `email_dmarc` in

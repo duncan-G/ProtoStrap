@@ -182,8 +182,10 @@ cdn:
 ```
 
 - **`cdn: {}` adds nothing** to ProtoStrap's settings, which stay in Terraform: Always Use
-  HTTPS and TLS 1.2 at least for the zone, and Access for operator UIs (the root's
-  `operator_hosts`). Without `cdn`, Cloudflare caches by its default: static files only.
+  HTTPS, TLS 1.2 at least and Respect Existing Headers for the zone, and Access for operator
+  UIs (the root's `operator_hosts`). Without `cdn`, Cloudflare caches by its default: static
+  files only, for the origin's `Cache-Control`. Browsers can't be purged, so a file whose URL
+  doesn't change with its content needs a short `max-age` or `no-cache` from its origin.
 - **`rate_limit`** blocks a client (an IP address, at each Cloudflare data centre) over
   `requests` in `period` for that period: `10s`, `1m`, `2m`, `5m`, `10m` or `1h`. It is
   broad; a route's own `rate` is the gateway's.

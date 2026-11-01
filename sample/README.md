@@ -40,7 +40,7 @@ with these permissions, scoped to the account and the zone:
 | --------------------------------------- | --------------------------------------------------- |
 | Account → Cloudflare Tunnel → Edit      | The tunnel and its routes, and fetching its token   |
 | Zone → DNS → Edit                       | A record per host, pointing at the tunnel           |
-| Zone → Zone Settings → Edit             | Always use HTTPS, and the minimum TLS version       |
+| Zone → Zone Settings → Edit             | Always use HTTPS, the minimum TLS version, and the browser cache TTL |
 | Zone → Zone → Read                      | Finding the zone                                    |
 | Zone → Zone WAF → Edit                  | Only with the spec's `cdn` WAF rules or rate limit  |
 | Zone → Cache Rules → Edit               | Only with the spec's `cdn` cache rules              |
