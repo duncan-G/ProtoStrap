@@ -50,9 +50,11 @@ builder.AddProtoStrapEnvironment("protostrap", app: "shop")
 `WithHost("web", "shop.example.com", local: "web.localhost")` names a host: routes refer to
 it as `web/`, each account's Terraform root may give `web` another hostname, and under
 `aspire run` every resource gets `HOST_WEB` and `ORIGIN_WEB` for the local one. `WithEdge(cpu:, memory:)`, `WithSpecPath(...)` and `WithCheck(...)` are optional.
-`WithDevSecret()` has `aspire run` take every parameter's value from dev's secret,
-`shop/dev`, by the key the component reads in an account, after an AWS SSO sign-in with the
-`developer` profile; it stops, naming the keys, if one is missing (docs/secrets.md#dev).
+Under `aspire run` the environment is dev, and its secret `shop/dev`: every component's
+process gets `SECRET_ID`, `SECRET_PREFIX`, `AWS_REGION` and `AWS_PROFILE` (the AppHost's, or
+`developer`), and reads it as in an account once the developer has run `aws sso login`.
+Containers take Aspire's parameters locally, so dev's secret holds none of their keys
+(docs/secrets.md#dev).
 
 ## Every compute resource says its kind
 
@@ -139,6 +141,7 @@ builder.AddProject<Projects.Shop_OrdersWorker>("orders-worker")
 | `.Ready(Readiness.Grpc.On(9001))`, `Readiness.Tcp`, `Readiness.Command(...)` | `ready: grpc:9001`, `tcp`, `[...]`; workers and stateful too |
 | `.Protocol(GatewayProtocol.Http2)`            | `protocol: http2`                                            |
 | `.Authorize(auth, path: "/auth/check", headers: ["x-user"], forward: ["cookie"], respond: ["set-cookie"])` | `authorize`: the edge asks `auth` about each request first |
+| `.Authorize(auth, open: true, timeout: TimeSpan.FromMilliseconds(500), skip: ["/assets/", "*.js"])` | `open`, `timeout: 500ms`, `skip`: requests `auth` can't answer for go on anonymously, and static files aren't asked about |
 | `.WithProtoStrapSources(":(glob)protos/**")`  | More `sources`, for inputs MSBuild can't see                 |
 | `.WithProtoStrapConfig("../config/x", "/etc/x")` | `config`: files it reloads, a read-only bind mount under `aspire run` |
 | `.OnConfigChange(ConfigChange.Reload)` or `ConfigChange.Run(...)` | `on_config_change`                         |

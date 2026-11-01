@@ -208,7 +208,7 @@ type Component struct {
 
 // Authorize is a service that answers the edge for another's requests (docs/protostrap.md,
 // "Authorizing requests"). The edge sends it each request's method, path and headers,
-// without the body, to its port at Path followed by the request's own path. A 2xx lets the
+// without the body, to its port at Path followed by the request's own path. A 200 lets the
 // request through, with the authorizer's Headers added to it and its Respond headers added
 // to the service's response; anything else is the response.
 type Authorize struct {
@@ -223,10 +223,19 @@ type Authorize struct {
 	// Forward are the request's headers the edge sends the authorizer, besides
 	// Authorization, such as cookie.
 	Forward []string `yaml:"forward"`
-	// Respond are the response headers of the authorizer's 2xx the edge adds to the
+	// Respond are the response headers of the authorizer's 200 the edge adds to the
 	// service's response, such as set-cookie for a session it renewed. Each value is a
 	// header of its own, after the service's.
 	Respond []string `yaml:"respond"`
+	// Open has the edge send a request the authorizer can't answer for on, without Headers,
+	// rather than answer 503: no ready replica, no connection, no answer in time, or a 5xx.
+	Open bool `yaml:"open"`
+	// Timeout is how long the edge waits for the authorizer. Zero is 2s.
+	Timeout Duration `yaml:"timeout"`
+	// Skip are the requests the edge sends on without asking: path prefixes under the
+	// service's routes, such as /assets/, and file extensions, such as *.js. Headers are
+	// still removed from them.
+	Skip []string `yaml:"skip"`
 }
 
 // CheckPath is the prefix of the path the edge asks the authorizer for.

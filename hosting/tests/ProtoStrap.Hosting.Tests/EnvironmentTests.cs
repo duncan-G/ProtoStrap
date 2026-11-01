@@ -339,6 +339,37 @@ public class EnvironmentTests
     }
 
     [Fact]
+    public async Task RunModeGivesEveryProcessTheVariablesAReplicaReadsItsSecretWith()
+    {
+        using var repo = new FixtureRepo();
+        var builder = TestApp.Run(repo);
+        builder.AddEnvironment();
+        var api = builder.AddProject("api", repo.Project("services/api/Api.csproj", "Microsoft.NET.Sdk.Web"))
+            .PublishAsProtoStrapService(s => s.Request(cpu: "250m", memory: "256Mi"));
+        var import = builder.AddExecutable("document-import", "dotnet", ".")
+            .PublishAsProtoStrapWorker(w => w.Request(cpu: "500m", memory: "512Mi"));
+        var config = builder.AddExecutable("keycloak-config", "dotnet", ".")
+            .PublishAsProtoStrapTask(t => t.Request(cpu: "100m", memory: "256Mi").SecretPrefix("Keycloak_"));
+        var keycloak = builder.AddContainer("keycloak", "quay.io/keycloak/keycloak", "26.7")
+            .PublishAsProtoStrapService(s => s.Request(cpu: "500m", memory: "1Gi").SecretFiles());
+        var tool = builder.AddExecutable("tool", "dotnet", ".");
+
+        // They are added once the model is complete, before anything starts.
+        ProtoStrapEnvironmentExtensions.AddSecretVariables(builder.Resources, "protofast/dev", "developer", "us-west-2");
+
+        var env = await RunModeEnvironmentAsync(api.Resource);
+        Assert.Equal("protofast/dev", env["SECRET_ID"]);
+        Assert.Equal("Api_", env["SECRET_PREFIX"]);
+        Assert.Equal("developer", env["AWS_PROFILE"]);
+        Assert.Equal("us-west-2", env["AWS_REGION"]);
+        Assert.Equal("DocumentImport_", (await RunModeEnvironmentAsync(import.Resource))["SECRET_PREFIX"]);
+        Assert.Equal("Keycloak_", (await RunModeEnvironmentAsync(config.Resource))["SECRET_PREFIX"]);
+        // A container has no sign-in, and a resource that isn't a component has no secret.
+        Assert.DoesNotContain("SECRET_ID", (await RunModeEnvironmentAsync(keycloak.Resource)).Keys);
+        Assert.DoesNotContain("SECRET_ID", (await RunModeEnvironmentAsync(tool.Resource)).Keys);
+    }
+
+    [Fact]
     public async Task PublishModeLeavesTheHostVariablesToProtoStrap()
     {
         using var repo = new FixtureRepo();

@@ -321,4 +321,20 @@ func TestEdgeServicesCarryTheAuthorizer(t *testing.T) {
 	if api == nil || api.Authorize == nil || !reflect.DeepEqual(*api.Authorize, want) {
 		t.Errorf("api reaches the edge as %+v, want authorize %+v", api, want)
 	}
+
+	// The timeout reaches the edge as a Go duration, as Hosting writes it for the local edge.
+	sp, err = spec.Parse([]byte(strings.Replace(hostsSpec, "    routes: [shop/api/]\n",
+		"    routes: [shop/api/]\n    authorize: { by: web, open: true, timeout: 1500ms, skip: [/api/assets/, \"*.js\"] }\n", 1)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range EdgeServices(sp) {
+		if s.Name == "api" {
+			api = &s
+		}
+	}
+	want = edge.Authorize{By: "web", Path: "/", Open: true, Timeout: "1.5s", Skip: []string{"/api/assets/", "*.js"}}
+	if !reflect.DeepEqual(*api.Authorize, want) {
+		t.Errorf("api's authorize reaches the edge as %+v, want %+v", *api.Authorize, want)
+	}
 }

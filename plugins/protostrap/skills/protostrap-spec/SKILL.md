@@ -137,15 +137,27 @@ needs a Dockerfile of its own (`FROM keycloak/keycloak:26.1`, plus its files) to
   from a hostname in code or `env`.
 - Two routes matching the same host and path are rejected.
 - **`authorize: { by: auth, path: /auth/check, headers: [x-user], forward: [cookie] }`** has
-  the edge ask `auth` about each request to this service's routes first. A 2xx lets it
+  the edge ask `auth` about each request to this service's routes first. A 200 lets it
   through with `x-user` from the answer (the client's own `x-user` is removed first);
-  anything else is the response. Use it for sessions a sign-in service keeps, rather than
-  checking a cookie in every service. The authorizer's code is protostrap-contract's
-  "An authorizer".
-- **`respond: [set-cookie]`** in `authorize` adds those headers of a 2xx to the service's
+  anything else, a 204 included, is the response. Use it for sessions a sign-in service
+  keeps, rather than checking a cookie in every service. The authorizer's code is
+  protostrap-contract's "An authorizer".
+- **`respond: [set-cookie]`** in `authorize` adds those headers of a 200 to the service's
   response, each as a header of its own: for an authorizer that renews the session as it
-  checks it. Without it the client gets none of a 2xx's headers. It can't name
+  checks it. Without it the client gets none of a 200's headers. It can't name
   `content-length` or a connection's own headers, such as `connection`.
+- **An authorizer that can't answer** (no ready replica, no connection, a 5xx, or no answer
+  within `timeout`, default `2s`, at most `5s`) gets the client a 503. **`open: true`**
+  sends those requests on without `x-user` instead, for a service that serves anonymous
+  requests too.
+- **`skip: [/assets/, "*.js", "*.css"]`** sends those requests on without asking, still
+  without the client's `x-user`: prefixes under the service's routes, and extensions,
+  quoted (a plain `*` is a YAML alias), up to 30. They keep the route's `rate`, counted on
+  its own. Skips are only that service's: a longer route of another service under its
+  prefix, such as `/theplot/`, is still asked about, `.js` files included.
+- **The edge normalises paths** before routing (`/a/../b` is `/b`, `//` is `/`), and the
+  authorizer is asked about that path. A path with `%2F` or `%5C` gets a 307 to the same
+  path with `/` in its place.
 - `{ route: /py/, rate: 200/s }` rate-limits a route at the edge.
 - External clients can't use native gRPC through the tunnel. They use gRPC-Web, which Envoy
   translates for `protocol: grpc` services (any other service gets it as sent), or HTTP/JSON

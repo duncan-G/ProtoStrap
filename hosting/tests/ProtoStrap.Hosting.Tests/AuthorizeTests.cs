@@ -44,7 +44,7 @@ public class AuthorizeTests
     [Fact]
     public async Task TheAuthorizersAnswerCanReachTheClient()
     {
-        // A 2xx can carry headers back to the client too, such as a cookie the authorizer
+        // A 200 can carry headers back to the client too, such as a cookie the authorizer
         // renewed with the session.
         using var repo = new FixtureRepo();
         var builder = TestApp.Publish(repo);
@@ -66,6 +66,72 @@ public class AuthorizeTests
         Assert.Contains("\n  authorize: { by: auth, path: /auth/check, headers: [x-identity], forward: [cookie], respond: [set-cookie] }\n", SpecText.Component(yaml, "api"));
         // Nothing to respond with is no respond.
         Assert.Contains("\n  authorize: { by: auth }\n", SpecText.Component(yaml, "web"));
+    }
+
+    [Fact]
+    public async Task AnAuthorizerCanBeOpenWaitedForAndSkipped()
+    {
+        // The edge sends on a request an open authorizer can't answer for, waits for it as long
+        // as its timeout, and doesn't ask about the requests skip names.
+        using var repo = new FixtureRepo();
+        var builder = TestApp.Publish(repo);
+        builder.AddEnvironment().WithHost("app", "protofast.dev", local: "app.localhost");
+        var auth = AddAuth(builder, repo);
+        builder.AddProject("web", repo.Project("services/web/Web.csproj", "Microsoft.NET.Sdk.Web"))
+            .WithHttpEndpoint(targetPort: 4000, name: "http")
+            .WithHttpHealthCheck("/healthz")
+            .PublishAsProtoStrapService(s => s.Request(cpu: "250m", memory: "256Mi").Routes("app")
+                .Authorize(auth, headers: ["x-identity"], open: true, timeout: TimeSpan.FromMilliseconds(500), skip: ["/assets/", "*.js", "*.woff2"]));
+        builder.AddProject("api", repo.Project("services/api/Api.csproj", "Microsoft.NET.Sdk.Web"))
+            .PublishAsProtoStrapService(s => s.Request(cpu: "500m", memory: "512Mi").Ready(Readiness.Grpc).Routes("app/api/")
+                .Authorize(auth, open: false, timeout: TimeSpan.FromSeconds(1), skip: ["/api/"]));
+        builder.AddProject("admin", repo.Project("services/admin/Admin.csproj", "Microsoft.NET.Sdk.Web"))
+            .WithHttpEndpoint(targetPort: 4001, name: "http")
+            .WithHttpHealthCheck("/healthz")
+            .PublishAsProtoStrapService(s => s.Request(cpu: "250m", memory: "256Mi").Routes("app/admin/").Authorize(auth, skip: []));
+
+        var yaml = await TestApp.GenerateYamlAsync(builder);
+
+        // An extension is quoted: a plain *.js would be an alias.
+        Assert.Contains("\n  authorize: { by: auth, headers: [x-identity], open: true, timeout: 500ms, skip: [/assets/, \"*.js\", \"*.woff2\"] }\n", SpecText.Component(yaml, "web"));
+        // A prefix can be a whole route, and a closed authorizer writes nothing.
+        Assert.Contains("\n  authorize: { by: auth, timeout: 1s, skip: [/api/] }\n", SpecText.Component(yaml, "api"));
+        Assert.Contains("\n  authorize: { by: auth }\n", SpecText.Component(yaml, "admin"));
+    }
+
+    [Fact]
+    public async Task WhatCantBeWaitedForOrSkippedIsReported()
+    {
+        using var repo = new FixtureRepo();
+        var builder = TestApp.Publish(repo);
+        builder.AddEnvironment().WithHost("app", "protofast.dev", local: "app.localhost");
+        var auth = AddAuth(builder, repo);
+        IResourceBuilder<ProjectResource> Web(string name, int port, TimeSpan? timeout, string[] skip) =>
+            builder.AddProject(name, repo.Project($"services/{name}/{name}.csproj", "Microsoft.NET.Sdk.Web"))
+                .WithHttpEndpoint(targetPort: port, name: "http")
+                .WithHttpHealthCheck("/healthz")
+                .PublishAsProtoStrapService(s => s.Request(cpu: "250m", memory: "256Mi").Routes($"app/{name}/").Authorize(auth, timeout: timeout, skip: skip));
+        Web("web", 4000, TimeSpan.Zero, ["/other/", "web/assets/", "/web/assets", "/web//assets/", "/web/x/../assets/", "*.JS", "*.min.js", "*"]);
+        Web("admin", 4001, TimeSpan.FromSeconds(6), []);
+        Web("docs", 4002, TimeSpan.FromMicroseconds(500), [.. Enumerable.Range(0, 31).Select(i => $"*.x{i}")]);
+
+        var problems = await TestApp.ProblemsAsync(builder);
+
+        Assert.Contains("web: Authorize: timeout must be above 0", problems);
+        // The edge gives the service 120s once the authorizer answers, and Cloudflare gives up
+        // at 125s.
+        Assert.Contains("admin: Authorize: timeout 6s is more than 5s: the edge gives the service 120s once the authorizer answers, and Cloudflare gives up at 125s", problems);
+        Assert.Contains("docs: Authorize: timeout 0.5ms isn't a whole number of milliseconds", problems);
+        Assert.Contains("web: Authorize: /other/ isn't under any of the service's routes", problems);
+        Assert.Contains("web: Authorize: \"web/assets/\" isn't a path prefix that starts and ends with /, such as /assets/, or a file extension, such as *.js", problems);
+        Assert.Contains("web: Authorize: \"/web/assets\" isn't a path prefix that starts and ends with /, such as /assets/, or a file extension, such as *.js", problems);
+        Assert.Contains("web: Authorize: \"*\" isn't a path prefix that starts and ends with /, such as /assets/, or a file extension, such as *.js", problems);
+        // The edge matches the path as RFC 3986 normalises it, which never has // or a dot segment.
+        Assert.Contains("web: Authorize: write /web//assets/ as /web/assets/", problems);
+        Assert.Contains("web: Authorize: write /web/x/../assets/ as /web/assets/", problems);
+        Assert.Contains("web: Authorize: \"*.JS\" isn't a file extension: up to 10 lower-case letters and digits after *., such as *.js", problems);
+        Assert.Contains("web: Authorize: \"*.min.js\" isn't a file extension: up to 10 lower-case letters and digits after *., such as *.js", problems);
+        Assert.Contains("docs: Authorize: skip has at most 30 file extensions", problems);
     }
 
     [Fact]

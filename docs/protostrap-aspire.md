@@ -314,6 +314,7 @@ on the `PATH`.
 | `Ready(Readiness.Command("pg_isready"))`      | `ready: [pg_isready]`                                           |
 | `Protocol(GatewayProtocol.Http2)`             | `protocol: http2`                                               |
 | `Authorize(auth, path: "/auth/check", headers: ["x-user"], forward: ["cookie"], respond: ["set-cookie"])` | `authorize: { by: auth, ... }` ([Authorizing requests](protostrap.md#authorizing-requests)) |
+| `Authorize(auth, open: true, timeout: TimeSpan.FromMilliseconds(500), skip: ["/assets/", "*.js"])` | `authorize: { by: auth, open: true, timeout: 500ms, skip: [/assets/, "*.js"] }` |
 | `WithDataVolume()`                            | The volume's `path`, stateful only                              |
 | `WithProtoStrapConfig("../config/x", "/etc/x")` | `config: { from: config/x, path: /etc/x }`, and a read-only bind mount under `aspire run` |
 | `OnConfigChange(ConfigChange.Reload)`         | `on_config_change: reload`, or a command with `ConfigChange.Run(...)` |

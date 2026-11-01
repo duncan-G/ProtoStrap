@@ -183,6 +183,30 @@ public class LocalEdgeTests
     }
 
     [Fact]
+    public async Task TheLocalEdgeAuthorizesAsTheAccountsDoes()
+    {
+        // An open authorizer, its timeout as a Go duration, and what it skips reach the local
+        // edge by internal/edge's names for them.
+        using var repo = new FixtureRepo();
+        var builder = TestApp.Run(repo);
+        var protostrap = builder.AddEnvironment().WithHost("app", "protofast.dev", local: "app.dev.localhost");
+        var auth = builder.AddProject("auth", repo.Project("services/auth/Auth.csproj", "Microsoft.NET.Sdk.Web"))
+            .WithHttpEndpoint(name: "http")
+            .WithHttpHealthCheck("/healthz")
+            .PublishAsProtoStrapService(s => s.Request(cpu: "250m", memory: "256Mi"));
+        builder.AddProject("api", repo.Project("services/api/Api.csproj", "Microsoft.NET.Sdk.Web"))
+            .WithHttpEndpoint(name: "http")
+            .PublishAsProtoStrapService(s => s.Request(cpu: "500m", memory: "512Mi").Ready(Readiness.Grpc).Routes("app/")
+                .Authorize(auth, headers: ["x-user"], open: true, timeout: TimeSpan.FromMilliseconds(500), skip: ["/assets/", "*.js"]));
+
+        var routing = await LocalEdge.RoutingAsync(builder.Resources, protostrap.Resource, 10000,
+            (_, _) => Task.FromResult("host.docker.internal:51234"), CancellationToken.None);
+
+        var authorize = JsonDocument.Parse(routing).RootElement.GetProperty("services")[0].GetProperty("authorize");
+        Assert.Equal("""{"by":"auth","headers":["x-user"],"open":true,"timeout":"500ms","skip":["/assets/","*.js"]}""", JsonSerializer.Serialize(authorize));
+    }
+
+    [Fact]
     public async Task TheEdgeDependsOnTheServicesItReaches()
     {
         // Under Aspire's container tunnel, a project only gets its address on the container

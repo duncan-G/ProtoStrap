@@ -34,6 +34,9 @@ Fail at startup, naming the variable, when one the code needs is missing.
 
 - Read `SECRET_ID` from Secrets Manager once, at startup, with the SDK's default credential
   chain (no keys anywhere). It is a JSON object of strings.
+- Under `aspire run` with ProtoStrap.Hosting, `SECRET_ID` is dev's secret and `AWS_PROFILE` the
+  developer's SSO profile, which the same default chain finds. Don't also set AWS keys in the
+  environment: they win over the profile.
 - Keep the keys that start with `Shared_`, then those that start with `SECRET_PREFIX`, drop
   the prefixes, and **let its own keys win**. Never use keys with other prefixes: they belong
   to other components.
@@ -174,18 +177,24 @@ identity provider's realms, a broker's queues), gets it from a `task` named in i
 A service named in another's `authorize` (protostrap-spec) answers the edge for each request
 to that service's routes:
 
-- **Answer every method under its `path`,** fast: the edge waits at most 2 seconds, then
-  gives the client a 503. Read the session from the forwarded headers (a cookie), never the
-  body, which isn't sent.
-- **2xx lets the request through,** with the headers named in `headers` from the answer
+- **Answer every method under its `path`,** fast: the edge waits its `timeout`, 2 seconds
+  unless set, then gives the client a 503, or with `open: true` sends the request on as an
+  anonymous one. Read the session from the forwarded headers (a cookie), never the body,
+  which isn't sent. The path it's asked about is normalised, as the service gets it.
+- **200 lets the request through,** with the headers named in `headers` from the answer
   added. Leave them out for an anonymous request the service may still serve; the edge
   has already removed the client's own copies, so the service can trust what arrives.
-- **A 2xx can carry headers back to the client,** those named in `respond`, such as a
+- **A 200 can carry headers back to the client,** those named in `respond`, such as a
   `set-cookie` when the authorizer renewed the session as it checked it. The edge adds
   each to the service's response as a header of its own, after the service's, so send one
   `set-cookie` for each cookie; of a cookie both set, the browser keeps the authorizer's.
-  The client gets no other header of a 2xx.
-- **Anything else is the client's response,** as it is: 401, or a 302 to sign in.
+  The client gets no other header of a 200.
+- **Anything else is the client's response,** as it is: 401, a 302 to sign in, and a 204
+  or any other 2xx too. A 5xx counts as no answer.
+- **With `open: true`, a request without `headers` is anonymous,** not refused: the
+  service gets one whenever the authorizer is down or answers a 5xx, so it serves or
+  refuses it as it would any anonymous request. Requests `skip` names never reach the
+  authorizer.
 - **The authorized service reads the headers,** and trusts them only from the edge: a
   call from another service on the overlay carries whatever that service sends.
 

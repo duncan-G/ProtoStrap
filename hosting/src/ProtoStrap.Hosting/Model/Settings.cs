@@ -48,7 +48,9 @@ internal sealed class ComponentSettings(ComponentKind kind)
 
 internal sealed record RouteSettings(string Route, double? Rate);
 
-internal sealed record AuthorizeSettings(IResource By, string? Path, IReadOnlyList<string> Headers, IReadOnlyList<string> Forward, IReadOnlyList<string> Respond);
+internal sealed record AuthorizeSettings(
+    IResource By, string? Path, IReadOnlyList<string> Headers, IReadOnlyList<string> Forward, IReadOnlyList<string> Respond,
+    bool Open, TimeSpan? Timeout, IReadOnlyList<string> Skip);
 
 internal sealed record MetricsSettings(int Port, string Path);
 

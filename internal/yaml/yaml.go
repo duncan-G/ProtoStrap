@@ -512,7 +512,7 @@ func (s *scanner) flowValue(inFlow bool) (*Node, error) {
 	case '&':
 		return nil, s.errorf("anchors aren't supported")
 	case '*':
-		return nil, s.errorf("aliases aren't supported")
+		return nil, s.errorf(`aliases aren't supported: quote a value that starts with *, such as "*.js"`)
 	case '!':
 		return nil, s.errorf("tags aren't supported")
 	case '|', '>':

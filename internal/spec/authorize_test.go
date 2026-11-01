@@ -3,6 +3,7 @@ package spec
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 // withAuthorizer adds an auth service on /auth/ to the docs example, and has the api's routes
@@ -52,7 +53,7 @@ func TestParseAuthorize(t *testing.T) {
 	}
 }
 
-// An authorizer's 2xx can carry headers back to the client, such as a cookie it renewed with
+// An authorizer's 200 can carry headers back to the client, such as a cookie it renewed with
 // the session, besides the headers it adds to the request.
 func TestParseAuthorizeRespond(t *testing.T) {
 	s := mustParse(t, withAuthorizer("{ by: auth, headers: [x-identity], forward: [cookie], respond: [set-cookie, x-session-expires] }")(docsExample))
@@ -78,6 +79,44 @@ func TestParseAuthorizeRespond(t *testing.T) {
 	}
 }
 
+// An authorizer can be open, so the edge sends on a request it can't answer for, have a
+// timeout of its own, and be skipped for a service's static files.
+func TestParseAuthorizeOpenTimeoutAndSkip(t *testing.T) {
+	s := mustParse(t, withAuthorizer(`{ by: auth, headers: [x-identity], open: true, timeout: 500ms, skip: [/api/assets/, "*.js", "*.woff2"] }`)(docsExample))
+	if problems := s.Check(); len(problems) > 0 {
+		t.Fatalf("check: %v", Problems(problems))
+	}
+	a := s.Components["api"].Authorize
+	if !a.Open || a.Timeout.Duration != 500*time.Millisecond || strings.Join(a.Skip, ",") != "/api/assets/,*.js,*.woff2" {
+		t.Errorf("authorize = %+v", a)
+	}
+	// A prefix can be a whole route.
+	s = mustParse(t, withAuthorizer("{ by: auth, timeout: 5s, skip: [/api/] }")(docsExample))
+	if problems := s.Check(); len(problems) > 0 {
+		t.Errorf("check: %v", Problems(problems))
+	}
+	// Without them the edge asks about every request, waits 2s, and answers 503 when the
+	// authorizer can't answer.
+	a = mustParse(t, withAuthorizer("{ by: auth }")(docsExample)).Components["api"].Authorize
+	if a.Open || a.Timeout.Duration != 0 || a.Skip != nil {
+		t.Errorf("authorize = %+v", a)
+	}
+}
+
+// A timeout that isn't a duration, or an extension the spec doesn't quote, isn't read at all.
+func TestParseAuthorizeRefusesWhatIsntAValue(t *testing.T) {
+	for _, tt := range []struct{ authorize, want string }{
+		{"{ by: auth, timeout: fast }", `components.api.authorize.timeout: want a duration like "30s"`},
+		{"{ by: auth, timeout: -1s }", `components.api.authorize.timeout: want a duration like "30s"`},
+		{"{ by: auth, open: yes }", "components.api.authorize.open: want true or false"},
+		{"{ by: auth, skip: [*.js] }", `quote a value that starts with *, such as "*.js"`},
+	} {
+		if _, err := Parse([]byte(withAuthorizer(tt.authorize)(docsExample))); err == nil || !strings.Contains(err.Error(), tt.want) {
+			t.Errorf("%s: %v, want %s", tt.authorize, err, tt.want)
+		}
+	}
+}
+
 func TestCheckAuthorize(t *testing.T) {
 	tests := []struct {
 		name string
@@ -100,7 +139,7 @@ func TestCheckAuthorize(t *testing.T) {
 		{"respond is checked at each index", withAuthorizer("{ by: auth, respond: [set-cookie, \"x y\"] }"), "components.api.authorize.respond[1]", "isn't a header name"},
 		// A pseudo-header is the response's status line, not a header the answer can lend
 		// another response: the edge would have to replace the service's status with the
-		// authorizer's 2xx.
+		// authorizer's 200.
 		{"respond with :status", withAuthorizer("{ by: auth, respond: [\":status\"] }"), "components.api.authorize.respond[0]", "isn't a header name"},
 		// The edge frames each response on its own connection to the client. The
 		// authorizer's content-length is its own body's, and added to the service's response
@@ -115,6 +154,25 @@ func TestCheckAuthorize(t *testing.T) {
 		{"respond with proxy-connection", withAuthorizer("{ by: auth, respond: [proxy-connection] }"), "components.api.authorize.respond[0]", "the edge sets proxy-connection itself"},
 		{"respond with upgrade", withAuthorizer("{ by: auth, respond: [upgrade] }"), "components.api.authorize.respond[0]", "the edge sets upgrade itself"},
 		{"respond with te", withAuthorizer("{ by: auth, respond: [te] }"), "components.api.authorize.respond[0]", "the edge sets te itself"},
+		{"zero timeout", withAuthorizer("{ by: auth, timeout: 0s }"), "components.api.authorize.timeout", "must be above 0"},
+		// The edge gives the service 120s once the authorizer answers, and Cloudflare gives
+		// up at 125s, so a longer wait would have Cloudflare answer instead of the edge.
+		{"long timeout", withAuthorizer("{ by: auth, timeout: 5001ms }"), "components.api.authorize.timeout", "must be at most 5s"},
+		{"timeout in days", withAuthorizer("{ by: auth, timeout: 1d }"), "components.api.authorize.timeout", "must be at most 5s"},
+		{"skip outside the routes", withAuthorizer("{ by: auth, skip: [/assets/] }"), "components.api.authorize.skip[0]", "/assets/ isn't under any of the service's routes"},
+		{"skip beside a route", withAuthorizer("{ by: auth, skip: [/apix/] }"), "components.api.authorize.skip[0]", "isn't under any of the service's routes"},
+		{"skip is checked at each index", withAuthorizer("{ by: auth, skip: [/api/a/, /b/] }"), "components.api.authorize.skip[1]", "isn't under any"},
+		{"skip without its last slash", withAuthorizer("{ by: auth, skip: [/api/assets] }"), "components.api.authorize.skip[0]", "isn't a path prefix that starts and ends with /"},
+		{"relative skip", withAuthorizer("{ by: auth, skip: [api/assets/] }"), "components.api.authorize.skip[0]", "isn't a path prefix that starts and ends with /"},
+		{"skip of everything", withAuthorizer(`{ by: auth, skip: ["*"] }`), "components.api.authorize.skip[0]", "or a file extension, such as *.js"},
+		// The edge matches the path as RFC 3986 normalises it, which a prefix with // or a
+		// dot segment never is.
+		{"skip with //", withAuthorizer("{ by: auth, skip: [/api//assets/] }"), "components.api.authorize.skip[0]", "write it as /api/assets/"},
+		{"skip with ..", withAuthorizer("{ by: auth, skip: [/api/x/../assets/] }"), "components.api.authorize.skip[0]", "write it as /api/assets/"},
+		{"upper-case extension", withAuthorizer(`{ by: auth, skip: ["*.JS"] }`), "components.api.authorize.skip[0]", "isn't a file extension"},
+		{"extension with a dot", withAuthorizer(`{ by: auth, skip: ["*.min.js"] }`), "components.api.authorize.skip[0]", "isn't a file extension"},
+		{"long extension", withAuthorizer(`{ by: auth, skip: ["*.abcdefghijk"] }`), "components.api.authorize.skip[0]", "up to 10 lower-case letters and digits"},
+		{"too many extensions", withAuthorizer("{ by: auth, skip: [" + strings.Repeat(`"*.js", `, 30) + `"*.css"] }`), "components.api.authorize.skip", "at most 30 file extensions"},
 		{"unrouted", func(s string) string {
 			return replace("    routes: [shop/api/]\n", "")(withAuthorizer("{ by: auth }")(s))
 		}, "components.api.authorize", "only a service with routes takes requests through the edge"},
