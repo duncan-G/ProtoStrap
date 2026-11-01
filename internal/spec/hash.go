@@ -77,7 +77,8 @@ func (c *Component) Fingerprint(image, config string) string {
 // run when it changes (docs/protostrap-aspire.md, "Infrastructure projection").
 type InfraProjection struct {
 	// Tunnel and Gateway say whether Terraform makes the tunnel, and the gateway's
-	// repository, role and hosts.
+	// repository, role and hosts. Terraform makes all of the CDN.
+	CDN        *CDN                      `json:"cdn,omitempty"`
 	Tunnel     bool                      `json:"tunnel"`
 	Gateway    bool                      `json:"gateway"`
 	Hosts      map[string]string         `json:"hosts"`
@@ -117,6 +118,7 @@ type compProjection struct {
 // Projection returns the infra projection.
 func (s *Spec) Projection() InfraProjection {
 	p := InfraProjection{
+		CDN:        s.CDN,
 		Tunnel:     s.Tunnel != nil,
 		Gateway:    s.Gateway != nil,
 		Hosts:      map[string]string(s.Hosts()),

@@ -137,14 +137,13 @@ module "protostrap" {
   log_retention_days    = 90
   backup_retention_days = 35
   snapshot_retention    = 14
-  client_rate_limit     = 300 # requests per client per 10 seconds; size it from real traffic
 }
 ```
 
 Other inputs worth knowing: `zones`, `vpc_cidr` (can't change later), `cors_origins`,
 `retired_components`, `retired_queues`, `retired_buckets`, `extra_egress`, `operator_hosts`
-(only with the spec's `tunnel`). `client_rate_limit` is Cloudflare's, so it applies only with
-a tunnel.
+(only with the spec's `tunnel`). Cloudflare's rate limit, WAF rules and cache rules aren't
+inputs: they are the spec's `cdn` (protostrap-spec), which needs a tunnel.
 
 ## infra/people/main.tf
 

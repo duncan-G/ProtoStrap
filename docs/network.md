@@ -161,9 +161,9 @@ it. Three things do, so a mistake in one doesn't open a port:
 Requests come in through the [tunnel](protostrap.md#tunnel) and the
 [gateway](protostrap.md#gateway), each of which runs only when the spec has it. The tunnel
 needs the gateway. Without a tunnel, nothing reaches the gateway from the internet:
-Terraform makes no tunnel, DNS records or rate limit, and the ingress VMs don't open the
-tunnel's port out. Without a gateway, no edge runs, and the ingress VMs only forward their
-zone's outbound traffic.
+Terraform makes no tunnel or DNS records, the spec can't have a [CDN](protostrap.md#cdn),
+and the ingress VMs don't open the tunnel's port out. Without a gateway, no edge runs, and
+the ingress VMs only forward their zone's outbound traffic.
 
 ### Cloudflare
 
@@ -171,14 +171,16 @@ The application's domain is on Cloudflare, managed by the infra workflow. Cloudf
 
 - **Sends every host to the tunnel.**
 - **Terminates TLS,** and sends plain HTTP to HTTPS.
-- **Filters traffic** with a broad rate limit per client. Envoy applies its own limits per
-  route. No WAF rules are set.
+- **Filters traffic** with the application's own WAF rules and a broad rate limit per
+  client, when the spec's [`cdn`](protostrap.md#cdn) has them. Envoy applies its own limits
+  per route. Without them, no WAF rules or rate limit are set.
 - **Checks who operators are** before they reach an operator UI (see
   [Operator UIs](#operator-uis)).
 - **Authenticates the application's mail,** if it sends any: each email domain's DKIM
   records, and the MX and SPF records of its MAIL FROM domain (see [Email](email.md)).
-- **Caches static assets,** but not API paths. Every byte it doesn't serve from cache is
-  paid for as data out of AWS (see [Costs](#costs)).
+- **Caches static assets,** but not API paths, unless the spec's `cdn` cache rules say
+  otherwise. Every byte it doesn't serve from cache is paid for as data out of AWS (see
+  [Costs](#costs)).
 
 ### The tunnel
 
@@ -466,6 +468,8 @@ Every byte the application sends through the tunnel is data out of AWS, at $0.09
 keep that down:
 
 - **Let Cloudflare cache** static assets, so each one leaves AWS once, not once per user.
+  Cache rules in the spec's [`cdn`](protostrap.md#cdn) cache what its default leaves out,
+  and keep assets longer.
 - **Serve large files from S3** with signed URLs, so they put no load on the tunnel.
 - **Compress responses** at Envoy.
 

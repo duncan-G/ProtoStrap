@@ -21,6 +21,16 @@ pools:
     reserved: { cpu: 400m, memory: 1Gi }
   data: { vm: m7g.xlarge, count: 1 }
 
+cdn:
+  rate_limit: { requests: 300, period: 10s }
+  waf:
+    - { name: scanners, paths: [/wp-admin/, /.env], action: block }
+    - { name: admin-abroad, hosts: [admin], not_countries: [US, CA], action: managed_challenge }
+    - { name: bots, expression: http.user_agent contains "sqlmap", action: block }
+  cache:
+    - { name: assets, hosts: [app], paths: [/assets/], edge_ttl: 30d, browser_ttl: 1d }
+    - { name: api, paths: [/api/], cache: false }
+
 tunnel: {}
 
 gateway:

@@ -20,6 +20,10 @@ The spec's fields as `internal/spec` reads them. A key not listed here is an err
 app: shop                      # up to 30 characters; names the secret, shop/<environment>, and the log groups
 protostrap: 0.1.1              # the ProtoStrap version; must match the workflows' @v and the roots' ?ref=
 pools: { ... }
+cdn:                           # optional; the application's own rules at Cloudflare (below). Needs the tunnel
+  rate_limit: { requests: 300, period: 1m }   # per client; period 10s (default), 1m, 2m, 5m, 10m or 1h
+  waf: [ ... ]                 # WAF rules, in order: the first that matches acts
+  cache: [ ... ]               # cache rules, in order: each that matches applies, a later one over an earlier
 tunnel: {}                     # optional; cloudflared, from Cloudflare to the gateway. Needs the gateway; no settings
 gateway:                       # optional; Envoy on each ingress VM. Without it: no edge, no hosts, no HOST_/ORIGIN_
   request: { cpu: 500m, memory: 256Mi }   # the default; covers cloudflared too; must fit the ingress VM
@@ -35,8 +39,8 @@ buckets: { ... }
 components: { ... }
 ```
 
-Each of `tunnel`, `gateway` and `telemetry` runs only when present; `{}` runs it with its
-defaults, and a section left empty (`tunnel:`) is an error. Without telemetry, replicas'
+Each of `cdn`, `tunnel`, `gateway` and `telemetry` runs only when present; `{}` runs it with
+its defaults, and a section left empty (`tunnel:`) is an error. Without telemetry, replicas'
 output goes to CloudWatch Logs and no `OTEL_` variable is set.
 
 ## Pools
@@ -65,6 +69,37 @@ VM types are Graviton (arm64): any of them, from the burstable `t4g` up; x86 typ
 `m7i` or `t3` are refused. Only Graviton3 and later (`c7g`, `m7g`, `r7g`, the `8g` families)
 encrypt traffic between VMs in hardware. A request must fit one VM of its pool after
 `reserved`.
+
+## CDN
+
+```yaml
+cdn:
+  waf:
+    - { name: office, ips: [203.0.113.0/24, "2001:db8::/32"], action: skip }
+    - { name: bots, not_ips: [198.51.100.7], expression: 'http.user_agent contains "sqlmap"', action: js_challenge }
+  cache:
+    - { name: pages, hosts: [app] }            # eligible for the cache, with the origin's TTLs
+```
+
+Every field of a rule is optional but `name`. Every field set must match, and within a
+field any value. Each rule is also scoped to the application's hosts in the zone.
+
+| Field                        | Rules | Meaning                                                                     |
+| ---------------------------- | ----- | --------------------------------------------------------------------------- |
+| `name`                       | both  | Required. Lowercase letters, digits and dashes; unique within its list      |
+| `hosts`                      | both  | Names in `gateway.hosts`, never hostnames. Empty: every host the tunnel serves, operator hosts included |
+| `paths`                      | both  | Path prefixes starting with `/`, such as `/admin/`                          |
+| `extensions`                 | both  | The path's file extension without the dot: up to 10 lower-case letters and digits, such as `js` |
+| `methods`                    | both  | Upper case: `GET`, `HEAD`, `POST`, `PUT`, `PATCH`, `DELETE`, `OPTIONS`      |
+| `countries`, `not_countries` | both  | Two-letter country codes, such as `US`                                      |
+| `ips`, `not_ips`             | both  | Addresses or CIDR ranges, such as `203.0.113.0/24`                          |
+| `expression`                 | both  | Cloudflare's rules language, for what the fields can't say. It must match too; `check` can't validate it |
+| `action`                     | WAF   | Required: `block`, `managed_challenge`, `js_challenge`, `challenge`, or `skip` (past the remaining WAF rules and the rate limit) |
+| `cache`                      | cache | `false` bypasses the cache, and takes no TTLs. Otherwise the responses are eligible for it |
+| `edge_ttl`, `browser_ttl`    | cache | How long Cloudflare and browsers keep a response, over the origin's headers: whole seconds, at least `1s` |
+
+A WAF rule can't have `cache`, `edge_ttl` or `browser_ttl`, and a cache rule can't have
+`action`.
 
 ## Gateway upstreams
 

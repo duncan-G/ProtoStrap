@@ -2,6 +2,7 @@ package spec
 
 import (
 	"fmt"
+	"net/netip"
 	"path"
 	"regexp"
 	"slices"
@@ -94,6 +95,7 @@ func (s *Spec) Check() []Problem {
 	c := &checker{s: s}
 	c.top()
 	c.pools()
+	c.cdn()
 	c.tunnel()
 	c.gateway()
 	c.telemetry()
@@ -128,6 +130,140 @@ func (c *checker) present(section string) bool {
 		c.add(section, "empty, so it doesn't run: write %s: {} to run it with ProtoStrap's defaults, or leave it out", section)
 	}
 	return n != nil && !n.IsNull()
+}
+
+// These are what a CDN rule may name: Cloudflare's rate limit periods, its WAF rules'
+// actions, and the shapes of a rule's values.
+var (
+	rateLimitPeriods = []time.Duration{10 * time.Second, time.Minute, 2 * time.Minute, 5 * time.Minute, 10 * time.Minute, time.Hour}
+	wafActions       = []string{"block", "managed_challenge", "js_challenge", "challenge", "skip"}
+	httpMethods      = []string{"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"}
+	countryCode      = regexp.MustCompile(`^[A-Z][A-Z0-9]$`)
+	fileExtension    = regexp.MustCompile(`^[a-z0-9]{1,10}$`)
+)
+
+// cdn checks the CDN: its rate limit, and each of its WAF and cache rules.
+func (c *checker) cdn() {
+	if !c.present("cdn") {
+		return
+	}
+	cdn := c.s.CDN
+	if c.s.Tunnel == nil {
+		c.add("cdn", "the CDN is Cloudflare in front of the tunnel: add tunnel: {}")
+	}
+	if r := cdn.RateLimit; r != nil {
+		if r.Requests < 1 {
+			c.add("cdn.rate_limit.requests", "must be at least 1")
+		}
+		if !slices.Contains(rateLimitPeriods, r.Period.Duration) {
+			c.add("cdn.rate_limit.period", "must be 10s, 1m, 2m, 5m, 10m or 1h, Cloudflare's periods")
+		}
+	}
+	for _, list := range []struct {
+		name  string
+		rules []CDNRule
+	}{{"waf", cdn.WAF}, {"cache", cdn.Cache}} {
+		named := map[string]int{}
+		for i, r := range list.rules {
+			at := fmt.Sprintf("cdn.%s[%d]", list.name, i)
+			switch first, ok := named[r.Name]; {
+			case r.Name == "":
+				c.add(at+".name", "required: a name for the rule, such as block-admin")
+			case !dnsLabel.MatchString(r.Name):
+				c.add(at+".name", "%q must be lowercase letters, digits and dashes", r.Name)
+			case ok:
+				c.add(at+".name", "%s is also cdn.%s[%d]", r.Name, list.name, first)
+			default:
+				named[r.Name] = i
+			}
+			c.cdnRule(at, list.name, r)
+		}
+	}
+}
+
+// cdnRule checks what a CDN rule matches, and what it does.
+func (c *checker) cdnRule(at, list string, r CDNRule) {
+	hosts := c.s.Hosts()
+	for i, h := range r.Hosts {
+		ha := fmt.Sprintf("%s.hosts[%d]", at, i)
+		if _, ok := hosts[h]; ok {
+			continue
+		}
+		if strings.Contains(h, ".") {
+			c.add(ha, "a rule names a host by its name in gateway.hosts, such as %s, not its hostname", example(hosts))
+		} else {
+			c.add(ha, "no host %s in gateway.hosts", h)
+		}
+	}
+	for i, p := range r.Paths {
+		if !strings.HasPrefix(p, "/") || strings.ContainsAny(p, "\"\\ \t") {
+			c.add(fmt.Sprintf("%s.paths[%d]", at, i), "%q isn't a path prefix that starts with /, such as /admin/", p)
+		}
+	}
+	for i, e := range r.Extensions {
+		if !fileExtension.MatchString(e) {
+			c.add(fmt.Sprintf("%s.extensions[%d]", at, i), "%q isn't a file extension: up to 10 lower-case letters and digits, such as js", e)
+		}
+	}
+	for i, m := range r.Methods {
+		if !slices.Contains(httpMethods, m) {
+			c.add(fmt.Sprintf("%s.methods[%d]", at, i), "%q isn't an HTTP method in upper case, such as POST", m)
+		}
+	}
+	for field, codes := range map[string][]string{"countries": r.Countries, "not_countries": r.NotCountries} {
+		for i, code := range codes {
+			if !countryCode.MatchString(code) {
+				c.add(fmt.Sprintf("%s.%s[%d]", at, field, i), "%q isn't a two-letter country code, such as US", code)
+			}
+		}
+	}
+	for field, ranges := range map[string][]string{"ips": r.IPs, "not_ips": r.NotIPs} {
+		for i, ip := range ranges {
+			if _, err := netip.ParsePrefix(ip); err == nil {
+				continue
+			}
+			if _, err := netip.ParseAddr(ip); err != nil {
+				c.add(fmt.Sprintf("%s.%s[%d]", at, field, i), "%q isn't an IP address or range, such as 203.0.113.0/24", ip)
+			}
+		}
+	}
+	if c.s.has(at+".expression") && strings.TrimSpace(r.Expression) == "" {
+		c.add(at+".expression", "empty: leave it out, or write Cloudflare's rules language, such as http.user_agent contains \"bot\"")
+	}
+
+	cacheFields := []string{"cache", "edge_ttl", "browser_ttl"}
+	if list == "waf" {
+		switch {
+		case r.Action == "":
+			c.add(at+".action", "required: block, managed_challenge, js_challenge, challenge or skip")
+		case !slices.Contains(wafActions, r.Action):
+			c.add(at+".action", "%q must be block, managed_challenge, js_challenge, challenge or skip", r.Action)
+		}
+		for _, f := range cacheFields {
+			if c.s.has(at + "." + f) {
+				c.add(at+"."+f, "goes in a cache rule, in cdn.cache")
+			}
+		}
+		return
+	}
+	if c.s.has(at + ".action") {
+		c.add(at+".action", "goes in a WAF rule, in cdn.waf")
+	}
+	bypass := r.Cache != nil && !*r.Cache
+	for _, ttl := range []struct {
+		field string
+		d     time.Duration
+	}{{"edge_ttl", r.EdgeTTL.Duration}, {"browser_ttl", r.BrowserTTL.Duration}} {
+		switch {
+		case !c.s.has(at + "." + ttl.field):
+		case bypass:
+			c.add(at+"."+ttl.field, "a rule that bypasses the cache has no TTLs")
+		case ttl.d < time.Second:
+			c.add(at+"."+ttl.field, "must be at least 1s")
+		case ttl.d%time.Second != 0:
+			c.add(at+"."+ttl.field, "must be a whole number of seconds")
+		}
+	}
 }
 
 // tunnel checks the tunnel, which brings requests in for the gateway.

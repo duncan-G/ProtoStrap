@@ -1,5 +1,5 @@
 // Package spec reads protostrap.yaml, the one file that describes an application: its
-// pools, its tunnel, gateway and telemetry, its queues, its buckets and its components
+// pools, its CDN, tunnel, gateway and telemetry, its queues, its buckets and its components
 // (docs/protostrap.md#spec). Terraform reads the
 // same file for the resources it creates; the scheduler reads it, inside a release, for the
 // replicas it runs.
@@ -25,8 +25,9 @@ type Spec struct {
 	App        string `yaml:"app"`
 	ProtoStrap string `yaml:"protostrap"`
 	Pools      Pools  `yaml:"pools"`
-	// Tunnel, Gateway and Telemetry are ProtoStrap's own components. Each is nil when the
-	// spec leaves it out, and then doesn't run.
+	// CDN, Tunnel, Gateway and Telemetry are ProtoStrap's own components. Each is nil when
+	// the spec leaves it out, and then doesn't run.
+	CDN        *CDN                  `yaml:"cdn"`
 	Tunnel     *Tunnel               `yaml:"tunnel"`
 	Gateway    *Gateway              `yaml:"gateway"`
 	Telemetry  *Telemetry            `yaml:"telemetry"`
@@ -98,6 +99,57 @@ type Resources struct {
 // API converts to the agent's units.
 func (r Resources) API() api.Resources {
 	return api.Resources{CPU: int64(r.CPU), Memory: int64(r.Memory)}
+}
+
+// CDN is Cloudflare in front of the tunnel (docs/protostrap.md#cdn): the application's own
+// WAF rules, cache rules and per-client rate limit. Terraform makes every one, each scoped to
+// the hosts the tunnel serves, or to the gateway's hosts a rule names.
+type CDN struct {
+	RateLimit *RateLimit `yaml:"rate_limit"`
+	// WAF are custom firewall rules, in order: the first that matches acts.
+	WAF []CDNRule `yaml:"waf"`
+	// Cache are cache rules, in order: each that matches applies, a later one over an
+	// earlier.
+	Cache []CDNRule `yaml:"cache"`
+}
+
+// RateLimit is how many requests one client may send in Period before Cloudflare blocks it
+// for as long.
+type RateLimit struct {
+	Requests int      `yaml:"requests"`
+	Period   Duration `yaml:"period"`
+}
+
+// CDNRule is a WAF or a cache rule: the requests it matches, every field of which must
+// match, and what it does to them. Within a field, any value matches.
+type CDNRule struct {
+	Name string `yaml:"name"`
+	// Hosts are names in gateway.hosts. Empty is every host the tunnel serves.
+	Hosts []string `yaml:"hosts"`
+	// Paths are prefixes of the request's path.
+	Paths []string `yaml:"paths"`
+	// Extensions are the path's file extension, without the dot, such as js.
+	Extensions   []string `yaml:"extensions"`
+	Methods      []string `yaml:"methods"`
+	Countries    []string `yaml:"countries"`
+	NotCountries []string `yaml:"not_countries"`
+	// IPs and NotIPs are client addresses or ranges, such as 203.0.113.0/24.
+	IPs    []string `yaml:"ips"`
+	NotIPs []string `yaml:"not_ips"`
+	// Expression is Cloudflare's rules language, for what the fields above can't say. It
+	// must match too.
+	Expression string `yaml:"expression"`
+
+	// Action is a WAF rule's: block, managed_challenge, js_challenge, challenge, or skip,
+	// which skips the remaining WAF rules and the rate limit.
+	Action string `yaml:"action"`
+
+	// Cache false bypasses the cache; otherwise a cache rule makes responses eligible for
+	// it, for EdgeTTL at Cloudflare and BrowserTTL in browsers when set, over the origin's
+	// headers.
+	Cache      *bool    `yaml:"cache"`
+	EdgeTTL    Duration `yaml:"edge_ttl"`
+	BrowserTTL Duration `yaml:"browser_ttl"`
 }
 
 // Tunnel is cloudflared, which brings the requests for the gateway's hosts in from
@@ -601,7 +653,9 @@ var (
 	// the agent and scheduler share those cores.
 	defaultDataReserve = Resources{CPU: 0, Memory: 1024}
 	defaultGateway     = Resources{CPU: 500, Memory: 256}
-	defaultStop        = 10 * time.Second
+	// defaultRateLimitPeriod is Cloudflare's shortest, and the only one its free plan has.
+	defaultRateLimitPeriod = 10 * time.Second
+	defaultStop            = 10 * time.Second
 	// The telemetry replica's defaults are in docs/telemetry.md#settings.
 	defaultTelemetry          = Resources{CPU: 500, Memory: 1536}
 	defaultTelemetryVolume    = Size(20)
@@ -773,6 +827,9 @@ func (s *Spec) defaults() {
 	}
 	if !s.has("pools.data.reserved") {
 		s.Pools.Data.Reserved = defaultDataReserve
+	}
+	if c := s.CDN; c != nil && c.RateLimit != nil && !s.has("cdn.rate_limit.period") {
+		c.RateLimit.Period.Duration = defaultRateLimitPeriod
 	}
 	if g := s.Gateway; g != nil {
 		if !s.has("gateway.request") {

@@ -54,6 +54,28 @@ internal sealed class UpstreamSettings(IResource resource)
 
 internal sealed record RouteSettings(string Route, double? Rate);
 
+/// <summary>RateLimitSettings are what WithRateLimit gave the CDN.</summary>
+internal sealed record RateLimitSettings(int Requests, TimeSpan Period);
+
+/// <summary>CdnRuleSettings are what WithWafRule or WithCacheRule gave the CDN for one rule.</summary>
+internal sealed class CdnRuleSettings(string name)
+{
+    public string Name { get; } = name;
+    public List<string> Hosts { get; } = [];
+    public List<string> Paths { get; } = [];
+    public List<string> Extensions { get; } = [];
+    public List<string> Methods { get; } = [];
+    public List<string> Countries { get; } = [];
+    public List<string> NotCountries { get; } = [];
+    public List<string> Ips { get; } = [];
+    public List<string> NotIps { get; } = [];
+    public string? Expression { get; set; }
+    public string? Action { get; set; }
+    public bool Bypass { get; set; }
+    public TimeSpan? EdgeTtl { get; set; }
+    public TimeSpan? BrowserTtl { get; set; }
+}
+
 internal sealed record AuthorizeSettings(
     IResource By, string? Path, IReadOnlyList<string> Headers, IReadOnlyList<string> Forward, IReadOnlyList<string> Respond,
     bool Open, TimeSpan? Timeout, IReadOnlyList<string> Skip);

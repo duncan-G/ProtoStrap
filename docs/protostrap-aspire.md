@@ -55,7 +55,7 @@ two, so the deploy side is derived instead of restated.
    last apply. No step diffs one commit against the one before it.
 6. **Each field changes only what it must.** A new image or replica setting replaces
    replicas; a new route reloads the gateway; a new scale setting changes a count; a new queue,
-   bucket, pool or permission runs Terraform (see [Change classes](#change-classes)).
+   bucket, pool, CDN rule or permission runs Terraform (see [Change classes](#change-classes)).
 7. **Run and publish share one graph.** Dev-only resources are excluded from publish.
    ProtoStrap-only settings are annotations that `aspire run` ignores.
 
@@ -124,8 +124,8 @@ Its settings become the spec's top-level keys: `app`, `protostrap` and `pools`. 
 are the four in [Spec](protostrap.md#spec): a scaling pool lists VM types of one shape, and
 every type is Graviton (arm64), from the burstable t4g up ([VM types](vms.md#vm-types)).
 ProtoStrap's own components are added to it
-([The tunnel, the gateway and telemetry](#the-tunnel-the-gateway-and-telemetry)). Hosts,
-routes and sizes on this page are illustrative.
+([The tunnel, the gateway and telemetry](#the-tunnel-the-gateway-and-telemetry), and
+[The CDN](#the-cdn)). Hosts, routes and sizes on this page are illustrative.
 
 ### The tunnel, the gateway and telemetry
 
@@ -173,6 +173,44 @@ gateway.WithUpstream(auth, u => u.Routes("auth/"))
 - **Under `aspire run`,** only the gateway runs, as the local Envoy
   ([The local gateway](#the-local-gateway)). The tunnel and telemetry run only in an
   account: Developers read their services' telemetry in Aspire's dashboard.
+
+### The CDN
+
+The CDN is Cloudflare in front of the tunnel, with the application's own WAF rules, cache
+rules and rate limit per client ([CDN](protostrap.md#cdn)). The AppHost adds it to the
+environment, in front of the tunnel it adds:
+
+```csharp
+var tunnel = protostrap.AddCloudflareTunnel("tunnel", gateway);
+protostrap.AddCloudflareCdn("cdn", tunnel)
+    .WithRateLimit(requests: 300, period: TimeSpan.FromMinutes(1))
+    .WithWafRule("block-wp", r => r.Paths("/wp-admin/", "/wp-login.php").Block())
+    .WithWafRule("admin-abroad", r => r.Hosts("admin").NotCountries("US", "CA").ManagedChallenge())
+    .WithWafRule("office", r => r.Ips("203.0.113.0/24").Skip())
+    .WithWafRule("bots", r => r.Expression("http.user_agent contains \"sqlmap\"").JsChallenge())
+    .WithCacheRule("assets", r => r.Hosts("app").Paths("/assets/").Extensions("js", "css")
+        .Cache(edge: TimeSpan.FromDays(30), browser: TimeSpan.FromDays(1)))
+    .WithCacheRule("api", r => r.Paths("/api/").Bypass());
+```
+
+| Method                            | Adds                                                 | Settings                                                    |
+| --------------------------------- | ---------------------------------------------------- | ----------------------------------------------------------- |
+| `AddCloudflareCdn(name, tunnel)`  | The [CDN](protostrap.md#cdn), in front of the tunnel | `WithRateLimit`, `WithWafRule`, `WithCacheRule`. The tunnel is the same environment's |
+| `WithRateLimit(requests, period)` | Cloudflare's rate limit per client                   | `period` is 10 seconds unless given, or 1, 2, 5 or 10 minutes, or an hour |
+| `WithWafRule(name, r => ...)`     | A WAF rule, after those added before                 | What it matches, and one action: `Block()`, `ManagedChallenge()`, `JsChallenge()`, `Challenge()` or `Skip()` |
+| `WithCacheRule(name, r => ...)`   | A cache rule, after those added before               | What it matches, and `Cache(edge:, browser:)` or `Bypass()`. With neither, the responses are eligible for the cache, for the origin's TTLs |
+
+- **It is added once** per environment, and the environment's resource holds it, as `Cdn`.
+  Its parent is the environment, and it is no component of its own.
+- **Both kinds of rule match with** `Hosts`, `Paths`, `Extensions`, `Methods`, `Countries`,
+  `NotCountries`, `Ips`, `NotIps` and `Expression`, each as the spec's field of that name.
+  `Hosts` names hosts as `WithHost` named them, such as `"admin"`, never hostnames.
+- **The generator reports what `protostrap check` would,** naming the rule, such as
+  `cdn: WithWafRule("a"): no host shop: call WithHost("shop", ...) on gateway`, or a WAF rule
+  with no action: `call Block(), ManagedChallenge(), JsChallenge(), Challenge() or Skip()`.
+- **Without it,** Cloudflare runs with ProtoStrap's settings alone.
+- **Under `aspire run`,** it doesn't run, nor does the tunnel: requests reach the local
+  gateway directly.
 
 ### Component kinds
 
@@ -327,7 +365,9 @@ Generation fails, listing every resource at fault, when:
 - an upstream isn't a service from `PublishAsProtoStrapService`, is excluded from publish,
   or has no routes, or a route names a host the gateway doesn't have;
 - a compute resource has no `PublishAsProtoStrap*` call, or its settings, or the gateway's
-  or telemetry's, are missing or malformed, such as a request that isn't CPU and memory.
+  or telemetry's, are missing or malformed, such as a request that isn't CPU and memory;
+- the CDN's rate limit or a rule breaks the rules in [CDN](protostrap.md#cdn), such as a
+  rule naming a host the gateway doesn't have, or a WAF rule with no action.
 
 `protostrap check` then runs its own checks on the result, as before: requests that don't fit
 a VM, stateful components that don't fit their data VM together, overlapping routes, unknown
@@ -360,6 +400,10 @@ on the `PATH`.
 | `WithHttpHealthCheck("/healthz")`             | `ready: /healthz`, or `9000/healthz` on another endpoint's port |
 | `Ready(Readiness.Grpc.On(9001))`              | `ready: grpc:9001`, on a service, worker or stateful component  |
 | `Ready(Readiness.Command("pg_isready"))`      | `ready: [pg_isready]`                                           |
+| `AddCloudflareCdn("cdn", tunnel)`             | `cdn`, with what its methods set, or `cdn: {}`, before `tunnel` |
+| `.WithRateLimit(requests: 300)` on the CDN    | `rate_limit: { requests: 300, period: 10s }`                    |
+| `.WithWafRule("block-wp", r => r.Paths("/wp-admin/").Block())` | An item of `waf`, one line each: `{ name: block-wp, paths: [/wp-admin/], action: block }` |
+| `.WithCacheRule("api", r => r.Paths("/api/").Bypass())` | An item of `cache`: `{ name: api, paths: [/api/], cache: false }` |
 | `AddCloudflareTunnel("tunnel", gateway)`      | `tunnel: {}`                                                    |
 | `AddEnvoyGateway("gateway")`                  | `gateway`, with its `request`, always written: 500m and 256Mi unless `WithRequest` sets it |
 | `gateway.WithHost("app", "protofast.dev", local: "app.dev.localhost")` | `gateway.hosts: { app: protofast.dev }`, sorted by name |
@@ -468,6 +512,15 @@ pools:
     reserved: { cpu: 400m, memory: 1Gi }
   data: { vm: m7g.xlarge, count: 1 }
 
+cdn:
+  rate_limit: { requests: 300, period: 10s }
+  waf:
+    - { name: scanners, paths: [/wp-admin/, /.env], action: block }
+    - { name: admin-abroad, hosts: [admin], not_countries: [US, CA], action: managed_challenge }
+  cache:
+    - { name: assets, hosts: [app], paths: [/assets/], edge_ttl: 30d, browser_ttl: 1d }
+    - { name: api, paths: [/api/], cache: false }
+
 tunnel: {}
 
 gateway:
@@ -566,8 +619,8 @@ Payments now depends on two directories instead of all of `services/shared`.
 The API's `uses` comes from its two `WithReference` calls. A new reference is a one-line diff
 too, and it changes the API's role, so a reviewer sees every new permission.
 
-The tunnel, the gateway and telemetry come after the pools, in that order, each only if the
-AppHost added it. The components carry no routes: those are the gateway's, under
+The CDN, the tunnel, the gateway and telemetry come after the pools, in that order, each
+only if the AppHost added it. The components carry no routes: those are the gateway's, under
 `upstreams`.
 
 ### The generator
@@ -715,7 +768,8 @@ should. Changing the conversion service's port changes `conversion` and every co
 | A component removed                                             | —                            | Stopped                                    | Its routes removed           | Kept until a cleanup                    |
 | `gateway.hosts`, `queues`, `buckets`, a pool's VM types, minimum, maximum or count | — | — | — | Terraform |
 | `gateway.request`                                               | —                            | —                                          | Replaced, beside the old one | —                                       |
-| `tunnel` added or removed                                       | —                            | —                                          | Replaced, beside the old one | The tunnel, its DNS records and rate limit |
+| `cdn`, its rate limit or a rule                                 | —                            | —                                          | —                            | The zone's WAF, cache and rate limit rules |
+| `tunnel` added or removed                                       | —                            | —                                          | Replaced, beside the old one | The tunnel and its DNS records          |
 | `gateway` added or removed                                      | The edge image copied, when added | With hosts, every replica, for its `HOST_<NAME>` | Started, or stopped | Terraform                            |
 | `telemetry` added or removed                                    | The telemetry image copied, when added | Every replica, telemetry's included   | Replaced, beside the old one | Telemetry's volume, port and session document |
 | The `protostrap` version                                        | Binary, and the edge and telemetry images, copied | The scheduler and agents update themselves | Replaced, beside the old one | —                  |
@@ -734,13 +788,13 @@ Terraform config.
 
 ### Infrastructure projection
 
-Terraform reads only part of the spec: whether it has the tunnel, the gateway and
-telemetry; the gateway's `hosts`; each pool's VM types, minimum, maximum and count;
-`queues`; `buckets`; per component, its name and kind, its `uses` and `queue` signals, and a
-stateful component's `vm` and volume `size`; and, only when the spec has telemetry, its
-`volume` and how long it keeps logs and traces. From these it makes each component's ECR
-repository, secret, log group, [role](identity.md#component-roles) and EBS volume, the
-tunnel and its DNS records, and telemetry's volume.
+Terraform reads only part of the spec: the whole `cdn`; whether it has the tunnel, the
+gateway and telemetry; the gateway's `hosts`; each pool's VM types, minimum, maximum and
+count; `queues`; `buckets`; per component, its name and kind, its `uses` and `queue`
+signals, and a stateful component's `vm` and volume `size`; and, only when the spec has
+telemetry, its `volume` and how long it keeps logs and traces. From these it makes each
+component's ECR repository, secret, log group, [role](identity.md#component-roles) and EBS
+volume, the tunnel and its DNS records, the CDN's rules, and telemetry's volume.
 `protostrap plan` hashes that part. After a successful apply, the infra workflow writes the
 hash it applied to the deploy bucket, as `infra/<environment>.sha256`.
 
@@ -837,8 +891,8 @@ can be wired to call `protostrap deploy` for convenience.
 When the environment has a gateway, `aspire run` runs it too: a container named as the
 gateway's resource is, such as `gateway`, of the Envoy an account's edge runs
 (`envoyproxy/envoy` at the edge's version), configured by the same renderer. Only the
-gateway runs locally. The tunnel and telemetry run only in an account: requests reach the
-local gateway directly, and the dashboard has the services' telemetry.
+gateway runs locally. The CDN, the tunnel and telemetry run only in an account: requests
+reach the local gateway directly, and the dashboard has the services' telemetry.
 
 - **It serves each host's local hostname** from `WithHost(..., local: "admin.dev.localhost")`
   on one port, 20000 unless the gateway's `WithLocalPort(...)` says otherwise: browsers open

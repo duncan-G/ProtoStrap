@@ -82,9 +82,15 @@ internal sealed partial class SpecGenerator(
         var components = await ComponentsAsync(cancellationToken);
         var gateway = environment.Gateway is { } g ? Gateway(g) : null;
         var telemetry = environment.Telemetry is { } t ? Telemetry(t) : null;
+        var cdn = environment.Cdn is { } c ? Cdn(c) : null;
 
         document.AddGroupBreak();
         document["pools"] = pools;
+        if (cdn is not null)
+        {
+            document.AddGroupBreak();
+            document["cdn"] = cdn;
+        }
         if (environment.Tunnel is not null)
         {
             document.AddGroupBreak();
@@ -244,8 +250,116 @@ internal sealed partial class SpecGenerator(
         return cpu is null || memory is null ? null : new YamlMap { ["cpu"] = cpu, ["memory"] = memory };
     }
 
-    // This section writes ProtoStrap's own components: the gateway and telemetry. The tunnel has
-    // no settings.
+    // This section writes ProtoStrap's own components: the CDN, the gateway and telemetry. The
+    // tunnel has no settings.
+
+    private static readonly TimeSpan[] RateLimitPeriods =
+        [TimeSpan.FromSeconds(10), TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(2), TimeSpan.FromMinutes(5), TimeSpan.FromMinutes(10), TimeSpan.FromHours(1)];
+
+    private static readonly HashSet<string> HttpMethods = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"];
+
+    /// <summary>
+    /// Cdn writes the CDN: its rate limit, and its WAF and cache rules in the order they were
+    /// added, with the rules `protostrap check` applies.
+    /// </summary>
+    private YamlMap Cdn(ProtoStrapCdnResource cdn)
+    {
+        var at = cdn.Name + ": ";
+        var map = new YamlMap(YamlStyle.Block);
+        if (cdn.RateLimit is { } limit)
+        {
+            if (limit.Requests < 1)
+                _problems.Add(at + "WithRateLimit: requests must be at least 1");
+            var period = Quantity.Duration(limit.Period) ?? Quantity.Decimal(limit.Period.TotalMilliseconds) + "ms";
+            if (!RateLimitPeriods.Contains(limit.Period))
+                _problems.Add($"{at}WithRateLimit: period {period} must be 10s, 1m, 2m, 5m, 10m or 1h, Cloudflare's periods");
+            map["rate_limit"] = new YamlMap { ["requests"] = YamlScalar.Number(limit.Requests), ["period"] = period };
+        }
+        if (CdnRules(cdn, "WithWafRule", cdn.WafRules, waf: true) is { Items.Count: > 0 } waf)
+            map["waf"] = waf;
+        if (CdnRules(cdn, "WithCacheRule", cdn.CacheRules, waf: false) is { Items.Count: > 0 } cache)
+            map["cache"] = cache;
+        return map;
+    }
+
+    /// <summary>CdnRules writes a list of the CDN's rules, each on a line of its own.</summary>
+    private YamlSeq CdnRules(ProtoStrapCdnResource cdn, string method, List<CdnRuleSettings> rules, bool waf)
+    {
+        var items = new List<YamlNode>();
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var rule in rules)
+        {
+            if (!DnsLabel().IsMatch(rule.Name))
+                _problems.Add($"{cdn.Name}: {method}: \"{rule.Name}\" must be lowercase letters, digits and dashes");
+            else if (!names.Add(rule.Name))
+                _problems.Add($"{cdn.Name}: {method}: {rule.Name} is named twice: each rule has a name of its own");
+            items.Add(CdnRule($"{cdn.Name}: {method}(\"{rule.Name}\"): ", rule, waf));
+        }
+        return new YamlSeq(YamlStyle.Block, items);
+    }
+
+    /// <summary>CdnRule writes one of the CDN's rules: what it matches, then what it does.</summary>
+    private YamlMap CdnRule(string at, CdnRuleSettings rule, bool waf)
+    {
+        var map = new YamlMap { ["name"] = rule.Name };
+        var gateway = environment.Gateway;
+        var hosts = gateway?.Hosts ?? new Dictionary<string, string>();
+        foreach (var host in rule.Hosts)
+        {
+            if (host.Contains('.'))
+                _problems.Add($"{at}a rule names a host by its name, such as {hosts.Keys.Order(StringComparer.Ordinal).FirstOrDefault() ?? "app"}, not {host}");
+            else if (!hosts.ContainsKey(host))
+                _problems.Add($"{at}no host {host}: call WithHost(\"{host}\", ...) on {gateway?.Name ?? "the gateway"}");
+        }
+        foreach (var path in rule.Paths.Where(p => !p.StartsWith('/') || p.IndexOfAny(['"', '\\', ' ', '\t']) >= 0))
+            _problems.Add($"{at}\"{path}\" isn't a path prefix that starts with /, such as /admin/");
+        foreach (var extension in rule.Extensions.Where(e => !CdnExtension().IsMatch(e)))
+            _problems.Add($"{at}\"{extension}\" isn't a file extension: up to 10 lower-case letters and digits, such as js");
+        foreach (var verb in rule.Methods.Where(m => !HttpMethods.Contains(m)))
+            _problems.Add($"{at}\"{verb}\" isn't an HTTP method in upper case, such as POST");
+        foreach (var country in rule.Countries.Concat(rule.NotCountries).Where(c => !CountryCode().IsMatch(c)))
+            _problems.Add($"{at}\"{country}\" isn't a two-letter country code, such as US");
+        foreach (var ip in rule.Ips.Concat(rule.NotIps).Where(ip => !System.Net.IPNetwork.TryParse(ip, out _) && !System.Net.IPAddress.TryParse(ip, out _)))
+            _problems.Add($"{at}\"{ip}\" isn't an IP address or range, such as 203.0.113.0/24");
+        if (rule.Expression is { } expression && string.IsNullOrWhiteSpace(expression))
+            _problems.Add(at + "the expression is empty");
+
+        foreach (var (field, values) in new (string, List<string>)[]
+        {
+            ("hosts", rule.Hosts), ("paths", rule.Paths), ("extensions", rule.Extensions), ("methods", rule.Methods),
+            ("countries", rule.Countries), ("not_countries", rule.NotCountries), ("ips", rule.Ips), ("not_ips", rule.NotIps),
+        })
+        {
+            if (values.Count > 0)
+                map[field] = Seq(values);
+        }
+        if (rule.Expression is { } e)
+            map["expression"] = e;
+
+        if (waf)
+        {
+            if (rule.Action is { } action)
+                map["action"] = action;
+            else
+                _problems.Add(at + "no action: call Block(), ManagedChallenge(), JsChallenge(), Challenge() or Skip()");
+            return map;
+        }
+        if (rule.Bypass)
+            map["cache"] = YamlScalar.Bool(false);
+        foreach (var (field, what, ttl) in new[] { ("edge_ttl", "edge", rule.EdgeTtl), ("browser_ttl", "browser", rule.BrowserTtl) })
+        {
+            if (ttl is not { } t)
+                continue;
+            var text = Quantity.Duration(t) ?? Quantity.Decimal(t.TotalMilliseconds) + "ms";
+            if (t < TimeSpan.FromSeconds(1))
+                _problems.Add($"{at}the {what} TTL must be at least 1s");
+            else if (t.Ticks % TimeSpan.TicksPerSecond != 0)
+                _problems.Add($"{at}the {what} TTL {text} isn't a whole number of seconds");
+            else
+                map[field] = text;
+        }
+        return map;
+    }
 
     /// <summary>
     /// Gateway writes the gateway: what it reserves, its hosts, and its upstreams, each with its
@@ -1847,6 +1961,12 @@ internal sealed partial class SpecGenerator(
         var list = items.ToList();
         return list.Count <= 1 ? string.Concat(list) : string.Join(", ", list[..^1]) + " and " + list[^1];
     }
+
+    [GeneratedRegex("^[a-z0-9]{1,10}$")]
+    private static partial Regex CdnExtension();
+
+    [GeneratedRegex("^[A-Z][A-Z0-9]$")]
+    private static partial Regex CountryCode();
 
     [GeneratedRegex("^[a-z0-9]([a-z0-9-]*[a-z0-9])?$")]
     private static partial Regex DnsLabel();

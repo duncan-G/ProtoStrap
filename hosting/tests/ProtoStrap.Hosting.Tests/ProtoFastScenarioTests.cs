@@ -105,8 +105,15 @@ public class ProtoFastScenarioTests
             .WithHost("auth", "auth.protofast.dev", local: "auth.dev.localhost")
             .WithHost("admin", "admin.protofast.dev", local: "admin.dev.localhost")
             .WithRequest(cpu: "500m", memory: "256Mi");
-        protostrap.AddCloudflareTunnel("tunnel", gateway);
+        var tunnel = protostrap.AddCloudflareTunnel("tunnel", gateway);
         protostrap.AddTelemetry("telemetry");
+        protostrap.AddCloudflareCdn("cdn", tunnel)
+            .WithRateLimit(requests: 300)
+            .WithWafRule("scanners", r => r.Paths("/wp-admin/", "/.env").Block())
+            .WithWafRule("admin-abroad", r => r.Hosts("admin").NotCountries("US", "CA").ManagedChallenge())
+            .WithWafRule("bots", r => r.Expression("http.user_agent contains \"sqlmap\"").Block())
+            .WithCacheRule("assets", r => r.Hosts("app").Paths("/assets/").Cache(edge: TimeSpan.FromDays(30), browser: TimeSpan.FromDays(1)))
+            .WithCacheRule("api", r => r.Paths("/api/").Bypass());
 
         var postgres = builder.AddPostgres("postgres")
             .PublishAsProtoStrapStateful(s => s

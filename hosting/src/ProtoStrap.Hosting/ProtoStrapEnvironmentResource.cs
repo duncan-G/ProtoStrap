@@ -29,6 +29,9 @@ public sealed class ProtoStrapEnvironmentResource : Resource, IComputeEnvironmen
     /// </summary>
     public string? Version { get; internal set; }
 
+    /// <summary>Cdn is the CDN AddCloudflareCdn added, or null: then Cloudflare has ProtoStrap's settings alone.</summary>
+    public ProtoStrapCdnResource? Cdn { get; internal set; }
+
     /// <summary>Gateway is the gateway AddEnvoyGateway added, or null: then nothing is routed.</summary>
     public ProtoStrapGatewayResource? Gateway { get; internal set; }
 

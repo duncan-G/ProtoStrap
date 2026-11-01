@@ -171,6 +171,9 @@ aws sqs get-queue-attributes --queue-url "$(aws sqs get-queue-url --queue-name p
 | A trace stops at a queue                                        | The sender doesn't inject the context into the message, or the worker doesn't ask for its attributes | Code (protostrap-telemetry)               |
 | Jobs piling up in a dead-letter queue                           | The worker fails on them: its errors in Loki say why                                                  | Code, then an Org Admin moves them back (above) |
 | The hosts don't answer from the internet                        | The spec has a gateway but no `tunnel: {}`: nothing reaches the gateway, and Cloudflare has no records | Spec (protostrap-spec)                    |
+| Requests stopped at Cloudflare: a 403, a 429 or a challenge page, never in the gateway's counts | A WAF rule or the rate limit in the spec's `cdn`; Cloudflare's security events name the rule. A load test from one address meets the rate limit | Spec `cdn` (protostrap-spec), applied by the infra workflow |
+| Stale pages or assets after a deploy                            | A `cdn` cache rule's `edge_ttl` or `browser_ttl` keeps the old response                               | The rule's TTLs, or asset names that change with their content |
+| `infra` fails at Cloudflare on a `cdn` rule                     | The token lacks Zone WAF or Cache Rules Edit, the zone's plan can't take the rules or period, or an `expression` is invalid | An Org Admin widens the token; or spec `cdn` |
 
 ## Rolling back
 

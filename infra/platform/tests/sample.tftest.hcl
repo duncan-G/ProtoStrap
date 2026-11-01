@@ -714,3 +714,96 @@ run "no_gateway" {
     error_message = "No hosts without a gateway."
   }
 }
+
+# The CDN's own rules (docs/protostrap.md#cdn): each WAF and cache rule becomes a rule of its
+# phase's ruleset, its fields an expression scoped to the hosts it names, or else every host
+# the tunnel serves.
+run "cdn" {
+  command = apply
+
+  variables {
+    spec = replace(file("../../sample/protostrap.yaml"), "tunnel: {}\n", <<-EOT
+      cdn:
+        rate_limit: { requests: 300, period: 1m }
+        waf:
+          - { name: block-wp, paths: [/wp-admin/, /wp-login.php], action: block }
+          - { name: geo, hosts: [sample], methods: [POST, PUT], not_countries: [US, CA], action: managed_challenge }
+          - { name: office, ips: [203.0.113.0/24, "2001:db8::/32"], action: skip }
+          - { name: bots, not_ips: [198.51.100.7], expression: 'http.user_agent contains "sqlmap"', action: js_challenge }
+        cache:
+          - { name: assets, hosts: [sample], paths: [/assets/], extensions: [js, css], edge_ttl: 30d, browser_ttl: 1d }
+          - { name: api, paths: [/api/], cache: false }
+          - { name: pages, countries: [GB] }
+
+      tunnel: {}
+      EOT
+    )
+  }
+
+  assert {
+    condition = (cloudflare_ruleset.waf[0].phase == "http_request_firewall_custom" && cloudflare_ruleset.waf[0].kind == "zone" &&
+    [for r in cloudflare_ruleset.waf[0].rules : r.ref] == ["block-wp", "geo", "office", "bots"])
+    error_message = "The WAF rules are the zone's custom rules, in the spec's order."
+  }
+
+  assert {
+    condition = (cloudflare_ruleset.waf[0].rules[0].expression == "(http.host in {\"sample.example.com\"}) and (starts_with(http.request.uri.path, \"/wp-admin/\") or starts_with(http.request.uri.path, \"/wp-login.php\"))" &&
+    cloudflare_ruleset.waf[0].rules[0].action == "block")
+    error_message = "A rule matches its paths as prefixes, on the hosts the tunnel serves: ${cloudflare_ruleset.waf[0].rules[0].expression}"
+  }
+
+  assert {
+    condition     = cloudflare_ruleset.waf[0].rules[1].expression == "(http.host in {\"sample.example.com\"}) and (http.request.method in {\"POST\" \"PUT\"}) and (not ip.src.country in {\"US\" \"CA\"})"
+    error_message = "A rule's hosts are the account's hostnames for the names, and every field must match: ${cloudflare_ruleset.waf[0].rules[1].expression}"
+  }
+
+  assert {
+    condition = (cloudflare_ruleset.waf[0].rules[2].expression == "(http.host in {\"sample.example.com\"}) and (ip.src in {203.0.113.0/24 2001:db8::/32})" &&
+      cloudflare_ruleset.waf[0].rules[2].action == "skip" &&
+      cloudflare_ruleset.waf[0].rules[2].action_parameters.ruleset == "current" &&
+    cloudflare_ruleset.waf[0].rules[2].action_parameters.phases == tolist(["http_ratelimit"]))
+    error_message = "A skip rule skips the remaining WAF rules and the rate limit."
+  }
+
+  assert {
+    condition     = cloudflare_ruleset.waf[0].rules[3].expression == "(http.host in {\"sample.example.com\"}) and (not ip.src in {198.51.100.7}) and (http.user_agent contains \"sqlmap\")"
+    error_message = "A raw expression must match as well as the fields: ${cloudflare_ruleset.waf[0].rules[3].expression}"
+  }
+
+  assert {
+    condition = (cloudflare_ruleset.cache[0].phase == "http_request_cache_settings" &&
+      [for r in cloudflare_ruleset.cache[0].rules : r.ref] == ["assets", "api", "pages"] &&
+      alltrue([for r in cloudflare_ruleset.cache[0].rules : r.action == "set_cache_settings"]) &&
+    cloudflare_ruleset.cache[0].rules[0].expression == "(http.host in {\"sample.example.com\"}) and (starts_with(http.request.uri.path, \"/assets/\")) and (http.request.uri.path.extension in {\"js\" \"css\"})")
+    error_message = "The cache rules are the zone's cache settings, in the spec's order."
+  }
+
+  assert {
+    condition = (cloudflare_ruleset.cache[0].rules[0].action_parameters.cache == true &&
+      cloudflare_ruleset.cache[0].rules[0].action_parameters.edge_ttl.mode == "override_origin" &&
+      cloudflare_ruleset.cache[0].rules[0].action_parameters.edge_ttl.default == 2592000 &&
+      cloudflare_ruleset.cache[0].rules[0].action_parameters.browser_ttl.default == 86400 &&
+      cloudflare_ruleset.cache[0].rules[1].action_parameters.cache == false &&
+      cloudflare_ruleset.cache[0].rules[2].action_parameters.cache == true &&
+      cloudflare_ruleset.cache[0].rules[2].action_parameters.edge_ttl == null &&
+    cloudflare_ruleset.cache[0].rules[2].expression == "(http.host in {\"sample.example.com\"}) and (ip.src.country in {\"GB\"})")
+    error_message = "A cache rule caches, for its TTLs over the origin's when it has them, or bypasses the cache."
+  }
+
+  assert {
+    condition = (cloudflare_ruleset.rate_limit[0].rules[0].ratelimit.requests_per_period == 300 &&
+      cloudflare_ruleset.rate_limit[0].rules[0].ratelimit.period == 60 &&
+    cloudflare_ruleset.rate_limit[0].rules[0].ratelimit.mitigation_timeout == 60)
+    error_message = "The spec's rate limit: a client over it is blocked for its period."
+  }
+}
+
+# Without a cdn section, Cloudflare runs with ProtoStrap's zone settings alone.
+run "no_cdn" {
+  command = apply
+
+  assert {
+    condition     = length(cloudflare_ruleset.waf) == 0 && length(cloudflare_ruleset.cache) == 0 && length(cloudflare_ruleset.rate_limit) == 0
+    error_message = "No WAF, cache or rate limit rules without the spec's cdn."
+  }
+}

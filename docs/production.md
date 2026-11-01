@@ -247,7 +247,6 @@ module "protostrap" {
   log_retention_days    = 90
   backup_retention_days = 35
   snapshot_retention    = 14
-  client_rate_limit     = 300 # requests per client per 10 seconds; size it from real traffic
 }
 ```
 
@@ -277,6 +276,12 @@ are safe to change later. These are not:
   ([Telemetry settings](telemetry.md#settings)). Retention can change later; the volume,
   like every volume, only grows. Without telemetry, replicas' output goes to CloudWatch
   Logs ([Without telemetry](telemetry.md#without-telemetry)).
+- **Set a rate limit** at Cloudflare, sized from real traffic, in the spec's
+  [`cdn`](protostrap.md#cdn): `rate_limit: { requests: 300, period: 1m }`, or the AppHost's
+  `WithRateLimit(requests: 300, period: TimeSpan.FromMinutes(1))`. Add WAF rules for what
+  should never reach the application, and cache rules for its static assets. The zone's
+  Cloudflare plan decides how many rules and which periods it takes: the free plan allows
+  only the 10-second period.
 - **Set every maximum** knowingly: a pool's `max` is also the most it can cost.
 - **Pin `image` tags** for PostgreSQL and Redis to exact versions.
 

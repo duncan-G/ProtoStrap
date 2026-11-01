@@ -43,7 +43,7 @@ that is, so a component's whole footprint is in one place. There is no `iam.tf` 
 | `scheduler.tf`    | The scheduler's log group and permissions                                     |
 | `reporter.tf`     | The reporter's secret and permissions                                         |
 | `edge.tf`         | The Cloudflare tunnel, if the spec has one, and the edge's repository, secret, log group and role |
-| `cdn.tf`          | Cloudflare: DNS records, zone settings, rate limits and operator access      |
+| `cdn.tf`          | Cloudflare: DNS records, zone settings, the spec's WAF rules, cache rules and rate limit, and operator access |
 | `components.tf`   | Each component's repository, secret, log group, role and volume               |
 | `queues.tf`       | Each queue and its dead-letter queue                                          |
 | `files.tf`        | The files bucket                                                              |
@@ -95,13 +95,17 @@ set on that environment with `gh secret set --env`.
 | `operator_hosts`               | none           | Operator UIs, behind Cloudflare Access. They come in through the tunnel, so the spec needs `tunnel` |
 | `email_domains`                | the spec's     | The domains this account sends mail from: a second deployed environment uses its own ([Email](../docs/email.md#each-account)) |
 | `email_dmarc`                  | none           | The DMARC record for each email domain, for a domain that has none   |
-| `client_rate_limit`            | 0, none        | Requests per client per 10 seconds before Cloudflare blocks it        |
 | `retired_components`, `retired_queues` | none   | Components and queues removed from the spec but kept, so a rollback still works |
 | `retired_buckets`              | none           | Buckets removed from the spec but kept with their objects, each with the settings it had there |
 | `cors_origins`                 | none           | Origins besides the hosts whose browsers may use signed URLs on files and on `browser` buckets |
 | `protect_data_vms`             | true           | Stops data VMs being terminated. Turn off before destroying. Stateful components' volumes are always kept: a destroy leaves them in the account |
 | `force_destroy`                | false          | Lets a destroy delete buckets and repositories that aren't empty. Test environments only |
 | `log_retention_days`, `backup_retention_days` | | How long logs and backups are kept                                   |
+
+Cloudflare's rate limit, WAF rules and cache rules aren't settings of the root: they are the
+spec's [`cdn`](../docs/protostrap.md#cdn), scoped to the hostnames `hosts` gives. A root
+that set `client_rate_limit`, which is gone, moves it there as
+`cdn: { rate_limit: { requests: <it> } }`: its period was 10 seconds, still the default.
 
 
 ## Checking it offline

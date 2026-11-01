@@ -81,7 +81,7 @@ the spec has it: `tunnel`, `gateway` and `telemetry` ([Spec](docs/protostrap.md#
 
 | Component              | Service             | Provides                          |
 | ---------------------- | ------------------- | --------------------------------- |
-| **CDN**                | Cloudflare          | Public entry point, DNS, TLS, WAF |
+| **CDN**                | Cloudflare          | Public entry point, DNS, TLS, and the spec's WAF rules, cache rules and rate limit, from its `cdn` ([CDN](docs/protostrap.md#cdn)) |
 | **Queue**              | Amazon SQS          | Job queue                         |
 | **Blob store**         | Amazon S3           | Object storage                    |
 | **Secrets**            | AWS Secrets Manager | One secret per environment, with every component's keys |

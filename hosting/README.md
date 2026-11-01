@@ -29,7 +29,10 @@ var protostrap = builder.AddProtoStrapEnvironment("protostrap", app: "shop")
     .WithDataPool(vm: "m7g.xlarge");
 var gateway = protostrap.AddEnvoyGateway("gateway")
     .WithHost("shop", "shop.example.com", local: "shop.localhost");
-protostrap.AddCloudflareTunnel("tunnel", gateway);
+var tunnel = protostrap.AddCloudflareTunnel("tunnel", gateway);
+protostrap.AddCloudflareCdn("cdn", tunnel)
+    .WithRateLimit(requests: 300, period: TimeSpan.FromMinutes(1))
+    .WithCacheRule("assets", r => r.Paths("/assets/").Cache(edge: TimeSpan.FromDays(30)));
 protostrap.AddTelemetry("telemetry");
 
 var postgres = builder.AddPostgres("postgres")
@@ -77,6 +80,10 @@ added to the model in run mode, so `aspire run` is unchanged.
 | `gateway.WithUpstream(service, u => ...)`     | The service's entry in `gateway.upstreams`: `Routes`/`Route`, `Protocol`, and `Authorize` below. Registering it again adds to it |
 | `u.Authorize(auth, path, headers, forward, respond, open, timeout, skip)` | `authorize`: the service the gateway asks about each request to the upstream's routes first; with `open: true` the gateway sends on a request it can't answer for, `timeout` is how long it waits, up to 5 seconds, and `skip`'s prefixes and extensions, such as `/assets/` and `*.js`, aren't asked about ([Authorizing requests](../docs/protostrap.md#authorizing-requests)). The authorizer needn't be an upstream |
 | `.AddCloudflareTunnel(name, gateway)`         | `tunnel: {}`: cloudflared beside the gateway, which brings requests in from Cloudflare. It runs only in an account |
+| `.AddCloudflareCdn(name, tunnel)`             | `cdn`, with what the calls below set, or `{}`: Cloudflare in front of the tunnel, with the application's own rules. It runs only in an account ([CDN](../docs/protostrap.md#cdn)) |
+| `cdn.WithRateLimit(requests, period)`         | `rate_limit: { requests, period }`: Cloudflare blocks a client over it for the period, 10 seconds unless given, or 1, 2, 5 or 10 minutes, or an hour |
+| `cdn.WithWafRule(name, r => ...)`             | An item of `waf`: what it matches, with `Hosts`, `Paths`, `Extensions`, `Methods`, `Countries`, `NotCountries`, `Ips`, `NotIps` and `Expression`, and its action, `Block()`, `ManagedChallenge()`, `JsChallenge()`, `Challenge()` or `Skip()`. The first rule that matches acts |
+| `cdn.WithCacheRule(name, r => ...)`           | An item of `cache`: what it matches, as a WAF rule does, and `Cache(edge:, browser:)` for TTLs over the origin's, or `Bypass()`. Every rule that matches applies |
 | `.AddTelemetry(name)`                         | `telemetry`, with what `WithRequest`, `WithVolume` and `WithRetention` set, or `{}`. It runs only in an account; without it, replicas' output goes to CloudWatch Logs ([Telemetry](../docs/telemetry.md#without-telemetry)) |
 | `PublishAsProtoStrapService(...)`             | `kind: service`: `Pool`, `Request`, `Ready`, `Metrics`, `Stop`, `Scale`, `SecretFiles` |
 | `PublishAsProtoStrapWorker(...)`              | `kind: worker`: `Pool`, `Request`, `Metrics`, `Stop`, `Scale`, `SecretFiles` |
@@ -176,8 +183,8 @@ and has a Rebuild command that rebuilds and restarts the gateway
 Go, the gateway uses `protostrap` on `PATH`, with the same warning when it isn't the
 AppHost's version. On the dashboard the gateway links each host, references the services it
 reaches, and logs each request it routes. Every resource gets `HOST_<NAME>` and
-`ORIGIN_<NAME>` for the local hostnames. The tunnel and telemetry don't run locally: the
-dashboard has the services' telemetry.
+`ORIGIN_<NAME>` for the local hostnames. The CDN, the tunnel and telemetry don't run
+locally: requests reach the gateway directly, and the dashboard has the services' telemetry.
 
 In run mode, `AddProtoStrapQueue`, `AddProtoStrapBucket` and `AddProtoStrapFiles` add one
 LocalStack container, `protostrap-localstack`, which creates each queue and bucket, as
