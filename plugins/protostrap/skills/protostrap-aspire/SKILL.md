@@ -40,7 +40,7 @@ changed on disk: fix the AppHost and regenerate before committing.
 
 ```csharp
 var protostrap = builder.AddProtoStrapEnvironment("protostrap", app: "shop")
-    .WithVersion("0.1.3")                   // = the workflows' @v0.1.3 and the roots' ?ref=v0.1.3
+    .WithVersion("0.1.4")                   // = the workflows' @v0.1.4 and the roots' ?ref=v0.1.4
     .WithIngressPool(vm: "c8g.medium")
     .WithGeneralPool(vm: ["m7g.large", "m6g.large", "m8g.large", "m7gd.large"], min: 1, max: 4)
     .WithComputePool(vm: ["c7g.large", "c6g.large", "c8g.large", "c7gd.large"], min: 0, max: 2)
@@ -304,4 +304,4 @@ image then changes the build without a commit. Pin it before production.
 Until the package is on NuGet, the AppHost references its project from a ProtoStrap checkout
 at the same version, through an MSBuild property (`.protostrap/`, where CI checks it out, or
 `../ProtoStrap`), with `IsAspireProjectResource="false"`. The package pins an Aspire version
-(13.6.2 for 0.1.3): use the same `Aspire.AppHost.Sdk`.
+(13.6.2 for 0.1.4): use the same `Aspire.AppHost.Sdk`.
