@@ -34,8 +34,10 @@ type Release struct {
 	Version    string               `json:"protostrap"` // It is the ProtoStrap version VMs run.
 	Spec       string               `json:"spec"`       // It is protostrap.yaml as committed.
 	Components map[string]Component `json:"components"`
-	Edge       Component            `json:"edge"`
-	// Telemetry is empty in a release made before telemetry, which runs without it.
+	// Edge runs the gateway and the tunnel. It is empty when the spec has no gateway.
+	Edge Component `json:"edge,omitzero"`
+	// Telemetry is empty when the spec has no telemetry, and in a release made before
+	// telemetry, which runs without it.
 	Telemetry Component `json:"telemetry,omitzero"`
 	Created   time.Time `json:"created"`
 	// Config holds the components' config files, each set once, by its digest.
@@ -99,7 +101,7 @@ func Parse(b []byte) (Release, error) {
 					}
 				}
 			}
-			if r.Edge.Image == "" {
+			if s.Gateway != nil && r.Edge.Image == "" {
 				errs = append(errs, errors.New("no edge image"))
 			}
 		}
@@ -127,8 +129,10 @@ type Plan struct {
 	InfraHash  string     `json:"infra_hash"`
 	Builds     []Build    `json:"builds"`
 	Stateful   []Stateful `json:"stateful"`
-	Edge       string     `json:"edge"`
-	Telemetry  string     `json:"telemetry"`
+	// Edge and Telemetry are the images of ProtoStrap's own components the release runs, or
+	// empty when the spec doesn't run them.
+	Edge      string `json:"edge"`
+	Telemetry string `json:"telemetry"`
 }
 
 // Build is one image to build, with paths the workflow can use from where it runs: a
@@ -168,7 +172,13 @@ func MakePlan(specPath, registry, version string) (Plan, error) {
 	}
 	dir := filepath.Dir(specPath)
 	p := Plan{App: s.App, ProtoStrap: s.ProtoStrap, Version: version, InfraHash: s.InfraHash(),
-		Builds: []Build{}, Stateful: []Stateful{}, Edge: image(registry, "edge", version), Telemetry: image(registry, "telemetry", version)}
+		Builds: []Build{}, Stateful: []Stateful{}}
+	if s.Gateway != nil {
+		p.Edge = image(registry, "edge", version)
+	}
+	if s.Telemetry != nil {
+		p.Telemetry = image(registry, "telemetry", version)
+	}
 	for _, c := range s.Sorted() {
 		switch c.Kind {
 		case api.KindStateful:
@@ -374,8 +384,12 @@ func Make(specPath, commit, registry, version string) (Release, error) {
 		}
 		r.Components[c.Name] = Component{Image: images[c.Name], Fingerprint: c.Fingerprint(images[c.Name], digest), Config: digest}
 	}
-	r.Edge = Component{Image: p.Edge, Fingerprint: EdgeFingerprint(p.Edge, s.Edge.Request)}
-	r.Telemetry = Component{Image: p.Telemetry, Fingerprint: TelemetryFingerprint(p.Telemetry, s.Telemetry)}
+	if g := s.Gateway; g != nil {
+		r.Edge = Component{Image: p.Edge, Fingerprint: EdgeFingerprint(p.Edge, g.Request, s.Tunnel != nil)}
+	}
+	if t := s.Telemetry; t != nil {
+		r.Telemetry = Component{Image: p.Telemetry, Fingerprint: TelemetryFingerprint(p.Telemetry, *t)}
+	}
 	return r, nil
 }
 
@@ -451,13 +465,15 @@ func ReadConfig(dir, from string) (configfiles.Files, error) {
 	return files, nil
 }
 
-// EdgeFingerprint is the edge's fingerprint: its image and its request, the only setting
-// it has.
-func EdgeFingerprint(image string, request spec.Resources) string {
+// EdgeFingerprint is the edge's fingerprint: its image, the gateway's request, and whether
+// it runs the tunnel. An edge with the tunnel hashes as it did before the tunnel was
+// optional, so its replicas aren't replaced for an upgrade alone.
+func EdgeFingerprint(image string, request spec.Resources, tunnel bool) string {
 	b, _ := json.Marshal(struct {
-		Image   string         `json:"image"`
-		Request spec.Resources `json:"request"`
-	}{image, request})
+		Image    string         `json:"image"`
+		Request  spec.Resources `json:"request"`
+		NoTunnel bool           `json:"no_tunnel,omitempty"`
+	}{image, request, !tunnel})
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:8])
 }

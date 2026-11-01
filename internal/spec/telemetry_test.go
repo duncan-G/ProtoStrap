@@ -6,13 +6,12 @@ import (
 	"time"
 )
 
-// These tests cover the spec's telemetry section (docs/telemetry.md#settings): ProtoStrap
-// adds the telemetry replica on data-1, and the spec sets only its size and retention.
+// These tests cover the spec's telemetry section (docs/telemetry.md#settings): with one,
+// ProtoStrap adds the telemetry replica on data-1, and the section sets its size and retention.
 
-// withTelemetry adds a telemetry section, whose lines follow it, after the docs example's
-// edge.
+// withTelemetry gives the docs example's telemetry section the settings in lines.
 func withTelemetry(lines string) func(string) string {
-	return insertAfter("edge:\n  request: { cpu: 500m, memory: 256Mi }\n", "\ntelemetry:\n"+lines)
+	return replace("telemetry: {}\n", "telemetry:\n"+lines)
 }
 
 func TestTelemetryDefaults(t *testing.T) {
@@ -80,6 +79,12 @@ func TestTelemetryCheck(t *testing.T) {
 		{"metrics in minutes", withTelemetry("  retention: { metrics: 90m }\n"), "telemetry.retention.metrics", "whole number of days"},
 		{"a component named telemetry", replace("  orders-worker:\n", "  telemetry:\n"), "components.telemetry", "reserved"},
 		{"a bucket named telemetry", withBuckets("  telemetry: {}\n"), "buckets.telemetry", "reserved"},
+		// Without telemetry, data-1 is the stateful components' alone.
+		{"stateful fill data-1 without telemetry", func(s string) string {
+			s = replace("telemetry: {}\n\n", "")(s)
+			return replace("request: { cpu: 1000m, memory: 4Gi }", "request: { cpu: 1500m, memory: 5Gi }")(s)
+		}, "", ""},
+		{"stateful fill data-1 beside telemetry", replace("request: { cpu: 1000m, memory: 4Gi }", "request: { cpu: 1500m, memory: 5Gi }"), "telemetry.request", "data-1"},
 		// The stateful components are blamed when they don't fit by themselves, not
 		// telemetry.
 		{"stateful too big without telemetry", replace("request: { cpu: 1000m, memory: 4Gi }", "request: { cpu: 2000m, memory: 4Gi }"), "components.redis.request", "data-1"},

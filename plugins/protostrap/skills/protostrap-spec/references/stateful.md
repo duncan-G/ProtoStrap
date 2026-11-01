@@ -42,13 +42,14 @@ entries for both in ProtoStrap's `sample/protostrap.yaml`.
 - **Files it reloads**, such as `pg_hba.conf`: `config` with `on_config_change` that checks,
   then reloads (the sample's PostgreSQL does).
 - **`stop`**: long enough to shut down cleanly; 60 s for PostgreSQL.
-- **No `scale`, `routes` or `pool`.** Services reach it by name on the overlay.
+- **No `scale` or `pool`, and never an upstream of the gateway.** Services reach it by name
+  on the overlay.
 
 ## Fitting on the data VM
 
-Every stateful component on a data VM, plus the telemetry replica on data-1, plus the data
-pool's `reserved`, must fit that VM. `protostrap check` refuses a spec where they don't.
-A larger `pools.data.vm`, or a second data VM (`count: 2`, then `vm: data-2`), makes room;
+Every stateful component on a data VM, plus the telemetry replica on data-1 if the spec has
+`telemetry`, plus the data pool's `reserved`, must fit that VM. `protostrap check` refuses a
+spec where they don't. A larger `pools.data.vm`, or a second data VM (`count: 2`, then `vm: data-2`), makes room;
 both wait for a maintenance window, since they stop what's on the VM.
 
 ## Services that use it

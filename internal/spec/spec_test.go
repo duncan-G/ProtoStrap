@@ -14,8 +14,6 @@ import (
 // reads.
 const docsExample = `app: shop
 protostrap: 1.4.0
-hosts:
-  shop: shop.example.com
 
 pools:
   ingress: { vm: c8g.medium }
@@ -35,8 +33,17 @@ pools:
     reserved: { cpu: 400m, memory: 1Gi }
   data: { vm: m7g.xlarge, count: 1 }
 
-edge:
+tunnel: {}
+
+gateway:
   request: { cpu: 500m, memory: 256Mi }
+  hosts:
+    shop: shop.example.com
+  upstreams:
+    api:
+      routes: [shop/api/]
+
+telemetry: {}
 
 queues:
   orders: {}
@@ -50,7 +57,6 @@ components:
     request: { cpu: 500m, memory: 512Mi }
     port: 8080
     ready: grpc
-    routes: [shop/api/]
     metrics: 9090/metrics
     depends_on: [postgres, redis]
     uses: [orders]
@@ -104,8 +110,8 @@ func mustParse(t *testing.T, src string) *Spec {
 
 func TestParseDocsExample(t *testing.T) {
 	s := mustParse(t, docsExample)
-	if s.App != "shop" || s.ProtoStrap != "1.4.0" || len(s.Hosts) != 1 {
-		t.Errorf("top level: %q %q %v", s.App, s.ProtoStrap, s.Hosts)
+	if s.App != "shop" || s.ProtoStrap != "1.4.0" {
+		t.Errorf("top level: %q %q", s.App, s.ProtoStrap)
 	}
 	g := s.Pools.General
 	if len(g.VM) != 4 || g.VM[0] != "m7g.xlarge" || g.Min != 1 || g.Max != 10 || g.Spare != 1 || g.Target != 0.70 {
@@ -120,19 +126,22 @@ func TestParseDocsExample(t *testing.T) {
 	if s.Pools.Data.VM != "m7g.xlarge" || s.Pools.Data.Count != 1 {
 		t.Errorf("data pool: %+v", s.Pools.Data)
 	}
-	if s.Edge.Request != (Resources{CPU: 500, Memory: 256}) {
-		t.Errorf("edge: %+v", s.Edge)
+	if s.Tunnel == nil || s.Gateway == nil || s.Telemetry == nil {
+		t.Errorf("tunnel %v, gateway %v, telemetry %v: the docs example runs all three", s.Tunnel, s.Gateway, s.Telemetry)
+	}
+	if s.Gateway.Request != (Resources{CPU: 500, Memory: 256}) {
+		t.Errorf("gateway: %+v", s.Gateway)
 	}
 
 	api := s.Components["api"]
 	if api.Name != "api" || api.Kind != "service" || api.Request != (Resources{CPU: 500, Memory: 512}) {
 		t.Errorf("api: %+v", api)
 	}
-	if len(s.Hosts) != 1 || s.Hosts["shop"] != "shop.example.com" {
-		t.Errorf("hosts = %v", s.Hosts)
+	if hosts := s.Hosts(); len(hosts) != 1 || hosts["shop"] != "shop.example.com" {
+		t.Errorf("hosts = %v", hosts)
 	}
-	if len(api.Routes) != 1 || api.Routes[0] != (Route{Host: "shop", Path: "/api/"}) {
-		t.Errorf("api routes: %+v", api.Routes)
+	if u := s.Upstream("api"); u == nil || u.Name != "api" || len(u.Routes) != 1 || u.Routes[0] != (Route{Host: "shop", Path: "/api/"}) {
+		t.Errorf("api's upstream: %+v", u)
 	}
 	if api.Stop.Duration != 30*time.Second || api.Migrate == nil || strings.Join(api.Migrate.Command, " ") != "dotnet Api.dll migrate" {
 		t.Errorf("api stop %v, migrate %+v", api.Stop, api.Migrate)
@@ -222,8 +231,11 @@ components:
 	if s.Pools.Ingress.Reserved != (Resources{CPU: 200, Memory: 512}) {
 		t.Errorf("ingress reserve: %+v", s.Pools.Ingress.Reserved)
 	}
-	if s.Edge.Request != (Resources{CPU: 500, Memory: 256}) {
-		t.Errorf("edge default: %+v", s.Edge.Request)
+	if s.Tunnel != nil || s.Gateway != nil || s.Telemetry != nil {
+		t.Errorf("tunnel %v, gateway %v, telemetry %v: a spec without them runs none", s.Tunnel, s.Gateway, s.Telemetry)
+	}
+	if s.Hosts() != nil || s.Upstream("web") != nil {
+		t.Errorf("hosts %v, upstream %v without a gateway", s.Hosts(), s.Upstream("web"))
 	}
 	web := s.Components["web"]
 	if web.Stop.Duration != 10*time.Second {
@@ -328,13 +340,15 @@ func TestQuantities(t *testing.T) {
 
 func TestParseErrorsNameTheLine(t *testing.T) {
 	tests := []struct{ src, want string }{
-		{strings.Replace(docsExample, "cpu: 500m, memory: 512Mi", "cpu: 500m, memory: 512", 1), "line 36, column 35: components.api.request.memory"},
+		{strings.Replace(docsExample, "cpu: 500m, memory: 512Mi", "cpu: 500m, memory: 512", 1), "line 43, column 35: components.api.request.memory"},
 		{strings.Replace(docsExample, "    port: 8080\n", "    port: eighty\n", 1), "components.api.port: want a whole number"},
 		{strings.Replace(docsExample, "    kind: service\n", "    kind: service\n    colour: red\n", 1), "components.api.colour: unknown field"},
 		{strings.Replace(docsExample, "{ cpu: 70% }", "{ cpu: 70%, requests: 5/s }", 1), "components.api.scale.demand[0]: a demand signal has one of cpu, requests, queue or metric"},
 		{strings.Replace(docsExample, "{ cpu: 70% }", "{ rate: 2/s }", 1), "a demand signal has one of"},
-		{strings.Replace(docsExample, "routes: [shop/api/]", "routes: [{ route: /api/, burst: 3 }]", 1), "unknown field"},
-		{strings.Replace(docsExample, "hosts:\n  shop: shop.example.com\n", "hosts: [shop.example.com]\n", 1), "hosts names each host"},
+		{strings.Replace(docsExample, "routes: [shop/api/]", "routes: [{ route: /api/, burst: 3 }]", 1), "burst: unknown field"},
+		{strings.Replace(docsExample, "  hosts:\n    shop: shop.example.com\n", "  hosts: [shop.example.com]\n", 1), "gateway.hosts: hosts names each host"},
+		{strings.Replace(docsExample, "tunnel: {}", "tunnel: { token: x }", 1), "tunnel.token: unknown field"},
+		{strings.Replace(docsExample, "      routes: [shop/api/]\n", "      routes: [shop/api/]\n      ready: grpc\n", 1), "gateway.upstreams.api.ready: unknown field"},
 		{strings.Replace(docsExample, "migrate: [dotnet, Api.dll, migrate]", "migrate: { task: x }", 1), "migrate: want the name of a task, or a command"},
 		{withBuckets("  documents: { public: true }\n")(docsExample), "buckets.documents.public: unknown field"},
 		{withBuckets("  documents: { versions: forever }\n")(docsExample), "buckets.documents.versions: want a duration"},
@@ -359,7 +373,7 @@ func TestRoutes(t *testing.T) {
 	}
 	for _, tt := range tests {
 		s := mustParse(t, strings.Replace(docsExample, "routes: [shop/api/]", "routes: ["+tt.in+"]", 1))
-		if got := s.Components["api"].Routes[0]; got != tt.want {
+		if got := s.Upstream("api").Routes[0]; got != tt.want {
 			t.Errorf("route %s = %+v, want %+v", tt.in, got, tt.want)
 		}
 	}
@@ -389,6 +403,17 @@ func replace(old, new string) func(string) string {
 
 func insertAfter(anchor, text string) func(string) string { return replace(anchor, anchor+text) }
 
+// upstream adds lines to the api's entry in the docs example's gateway.upstreams.
+func upstream(lines string) func(string) string {
+	return insertAfter("  upstreams:\n    api:\n", "  "+strings.ReplaceAll(strings.TrimSuffix(lines, "\n"), "\n", "\n  ")+"\n")
+}
+
+// withoutGateway removes the docs example's gateway, and so its tunnel too, which needs it.
+func withoutGateway(s string) string {
+	s = replace("tunnel: {}\n\n", "")(s)
+	return replace("gateway:\n  request: { cpu: 500m, memory: 256Mi }\n  hosts:\n    shop: shop.example.com\n  upstreams:\n    api:\n      routes: [shop/api/]\n\n", "")(s)
+}
+
 // withBuckets adds a buckets section, whose entries are lines, after the docs example's queues.
 func withBuckets(lines string) func(string) string {
 	return insertAfter("queues:\n  orders: {}\n", "\nbuckets:\n"+lines)
@@ -405,10 +430,10 @@ func TestCheck(t *testing.T) {
 		{"no app", replace("app: shop\n", ""), "app", "required"},
 		{"bad app name", replace("app: shop", "app: Shop_1"), "app", "lowercase"},
 		{"bad version", replace("protostrap: 1.4.0", "protostrap: latest"), "protostrap", "version"},
-		{"bad hostname", replace("  shop: shop.example.com\n", "  shop: shop..example.com\n"), "hosts.shop", "host name"},
-		{"bad host name", replace("  shop: shop.example.com\n", "  Shop.Web: shop.example.com\n"), "hosts.Shop.Web", "lowercase letters, digits and dashes"},
-		{"hostname twice", replace("  shop: shop.example.com\n", "  shop: shop.example.com\n  www: shop.example.com\n"), "hosts.www", "also hosts.shop"},
-		{"empty hostname", replace("  shop: shop.example.com\n", "  shop: \"\"\n"), "hosts.shop", "host name"},
+		{"bad hostname", replace("    shop: shop.example.com\n", "    shop: shop..example.com\n"), "gateway.hosts.shop", "host name"},
+		{"bad host name", replace("    shop: shop.example.com\n", "    Shop.Web: shop.example.com\n"), "gateway.hosts.Shop.Web", "lowercase letters, digits and dashes"},
+		{"hostname twice", replace("    shop: shop.example.com\n", "    shop: shop.example.com\n    www: shop.example.com\n"), "gateway.hosts.www", "also gateway.hosts.shop"},
+		{"empty hostname", replace("    shop: shop.example.com\n", "    shop: \"\"\n"), "gateway.hosts.shop", "host name"},
 
 		// These cases cover the pools.
 		{"no ingress vm", replace("  ingress: { vm: c8g.medium }\n", "  ingress: {}\n"), "pools.ingress.vm", "required"},
@@ -426,7 +451,7 @@ func TestCheck(t *testing.T) {
 		{"data vm with instance store", replace("data: { vm: m7g.xlarge, count: 1 }", "data: { vm: m6gd.xlarge, count: 1 }"), "pools.data.vm", "instance store"},
 		{"data count over 3", replace("count: 1 }", "count: 4 }"), "pools.data.count", "1 to 3"},
 		{"no data pool", replace("  data: { vm: m7g.xlarge, count: 1 }\n", ""), "pools.data.vm", "required"},
-		{"edge too big", replace("request: { cpu: 500m, memory: 256Mi }\n\nqueues", "request: { cpu: 2000m, memory: 256Mi }\n\nqueues"), "edge.request", "fit"},
+		{"gateway too big", replace("  request: { cpu: 500m, memory: 256Mi }\n  hosts:", "  request: { cpu: 2000m, memory: 256Mi }\n  hosts:"), "gateway.request", "fit"},
 
 		// These cases cover the queues.
 		{"bad queue name", replace("  orders: {}", "  Orders: {}"), "queues.Orders", "lowercase"},
@@ -501,10 +526,10 @@ func TestCheck(t *testing.T) {
 		{"ready on a bad port", replace("ready: grpc", "ready: grpc:0"), "components.api.ready", "on a port"},
 		{"ready on another port", replace("ready: grpc", "ready: 9000/health/ready"), "", ""},
 		{"tcp ready", replace("ready: grpc", "ready: tcp"), "", ""},
-		{"routed service ready by command", replace("ready: grpc", "ready: [test, -f, /tmp/ready]"), "components.api.ready", "can't run a command"},
-		{"unrouted service ready by command", func(s string) string {
+		{"upstream ready by command", replace("ready: grpc", "ready: [test, -f, /tmp/ready]"), "components.api.ready", "can't run a command"},
+		{"service off the gateway ready by command", func(s string) string {
 			s = replace("ready: grpc", "ready: [test, -f, /tmp/ready]")(s)
-			return replace("    routes: [shop/api/]\n", "")(s)
+			return replace("  upstreams:\n    api:\n      routes: [shop/api/]\n", "")(s)
 		}, "", ""},
 		{"empty ready command", replace("ready: grpc", "ready: []"), "components.api.ready", "required"},
 		{"worker ready without a port", insertAfter("    build: services/orders-worker\n", "    ready: /healthz\n"), "components.orders-worker.ready", "names a port"},
@@ -514,28 +539,30 @@ func TestCheck(t *testing.T) {
 		{"stateful ready by command", insertAfter("    image: postgres:17.2\n", "    ready: [pg_isready, -U, postgres]\n"), "", ""},
 		{"stateful ready on another port", insertAfter("    image: postgres:17.2\n", "    ready: 9187/metrics\n"), "", ""},
 		{"task with ready", insertAfter("components:\n", "  mig:\n    kind: task\n    build: mig\n    pool: general\n    request: { cpu: 100m, memory: 128Mi }\n    ready: [true]\n"), "components.mig.ready", "runs to completion"},
-		{"bad protocol", insertAfter("    port: 8080\n", "    protocol: h3\n"), "components.api.protocol", "http1, http2 or grpc"},
-		{"http2 protocol", insertAfter("    port: 8080\n", "    protocol: http2\n"), "", ""},
-		{"grpc check over HTTP/1.1", insertAfter("    port: 8080\n", "    protocol: http1\n"), "components.api.ready", "http2 or grpc"},
+		{"bad protocol", upstream("    protocol: h3\n"), "gateway.upstreams.api.protocol", "http1, http2 or grpc"},
+		{"http2 protocol", upstream("    protocol: http2\n"), "", ""},
+		{"grpc check over HTTP/1.1", upstream("    protocol: http1\n"), "components.api.ready", "set gateway.upstreams.api.protocol to http2 or grpc"},
 		// Envoy refuses a gRPC check on a cluster that doesn't speak HTTP/2, whatever its port.
 		{"grpc check on another port over HTTP/1.1", func(s string) string {
-			s = insertAfter("    port: 8080\n", "    protocol: http1\n")(s)
+			s = upstream("    protocol: http1\n")(s)
 			return replace("ready: grpc", "ready: grpc:9001")(s)
 		}, "components.api.ready", "http2 or grpc"},
 		{"grpc check on another port by default", replace("ready: grpc", "ready: grpc:9001"), "components.api.ready", "http2 or grpc"},
 		{"grpc check on another port over HTTP/2", func(s string) string {
-			s = insertAfter("    port: 8080\n", "    protocol: http2\n")(s)
+			s = upstream("    protocol: http2\n")(s)
 			return replace("ready: grpc", "ready: grpc:9001")(s)
 		}, "", ""},
-		{"unrouted grpc check over HTTP/1.1", func(s string) string {
-			s = insertAfter("    port: 8080\n", "    protocol: http1\n")(s)
-			return replace("    routes: [shop/api/]\n", "")(s)
+		{"grpc check off the gateway on another port", func(s string) string {
+			s = replace("ready: grpc", "ready: grpc:9001")(s)
+			return replace("  upstreams:\n    api:\n      routes: [shop/api/]\n", "")(s)
 		}, "", ""},
-		{"worker with protocol", insertAfter("    build: services/orders-worker\n", "    protocol: grpc\n"), "components.orders-worker.protocol", "only services"},
-		{"worker with routes", insertAfter("    build: services/orders-worker\n", "    routes: [/x/]\n"), "components.orders-worker.routes", "only services"},
-		{"route to unknown host", replace("routes: [shop/api/]", "routes: [other/api/]"), "components.api.routes[0]", "no host other in hosts"},
-		{"route to a hostname", replace("routes: [shop/api/]", "routes: [shop.example.com/api/]"), "components.api.routes[0]", "by its name in hosts, such as shop/api/"},
+		{"route to unknown host", replace("routes: [shop/api/]", "routes: [other/api/]"), "gateway.upstreams.api.routes[0]", "no host other in gateway.hosts"},
+		{"route to a hostname", replace("routes: [shop/api/]", "routes: [shop.example.com/api/]"), "gateway.upstreams.api.routes[0]", "by its name in gateway.hosts, such as shop/api/"},
 		{"env sets a host", replace("    stop: 30s\n    scale:\n      min: 2", "    env: { HOST_SHOP: x.example.com }\n    stop: 30s\n    scale:\n      min: 2"), "components.api.env.HOST_SHOP", "ProtoStrap sets HOST_SHOP"},
+		{"env sets a host's variable without a gateway", func(s string) string {
+			s = replace("    stop: 30s\n    scale:\n      min: 2", "    env: { HOST_SHOP: x.example.com }\n    stop: 30s\n    scale:\n      min: 2")(s)
+			return withoutGateway(s)
+		}, "", ""},
 		{"env sets an origin", replace("    stop: 30s\n    scale:\n      min: 2", "    env: { ORIGIN_SHOP: https://x.example.com }\n    stop: 30s\n    scale:\n      min: 2"), "components.api.env.ORIGIN_SHOP", "ProtoStrap sets ORIGIN_SHOP"},
 		{"duplicate route", insertAfter("    build: services/orders-worker\n", ""), "", ""},
 		{"bad metrics endpoint", replace("metrics: 9090/metrics", "metrics: metrics"), "components.api.metrics", "port/path"},
@@ -585,7 +612,8 @@ func TestCheck(t *testing.T) {
 		{"scale max 0", replace("      min: 2\n      max: 10\n", "      min: 0\n      max: 0\n"), "components.api.scale.max", "at least 1"},
 		{"scale max below min", replace("      min: 2\n      max: 10\n", "      min: 5\n      max: 3\n"), "components.api.scale.max", "at least min"},
 		{"cpu target over 100%", replace("{ cpu: 70% }", "{ cpu: 150% }"), "components.api.scale.demand[0].cpu", "between"},
-		{"requests without routes", replace("demand: [{ queue: orders, rate: 2/s, drain: 60s }]", "demand: [{ requests: 5/s }]"), "components.orders-worker.scale.demand[0]", "routes"},
+		{"requests off the gateway", replace("demand: [{ queue: orders, rate: 2/s, drain: 60s }]", "demand: [{ requests: 5/s }]"), "components.orders-worker.scale.demand[0]", "gateway.upstreams"},
+		{"requests on an upstream", replace("demand: [{ cpu: 70% }]", "demand: [{ requests: 5/s }]"), "", ""},
 		{"queue signal unknown", replace("queue: orders, rate", "queue: nope, rate"), "components.orders-worker.scale.demand[0].queue", "no queue nope"},
 		{"queue signal without rate", replace("{ queue: orders, rate: 2/s, drain: 60s }", "{ queue: orders, drain: 60s }"), "components.orders-worker.scale.demand[0].rate", "required"},
 		{"queue signal without drain", replace("{ queue: orders, rate: 2/s, drain: 60s }", "{ queue: orders, rate: 2/s }"), "components.orders-worker.scale.demand[0].drain", "required"},
@@ -595,7 +623,6 @@ func TestCheck(t *testing.T) {
 		{"limit without any metrics", replace("    metrics: 9090/metrics\n", ""), "components.orders-worker.scale.limits[0]", "no component exports metrics"},
 		{"negative replica limit", replace("limits: [{ metric: llm_budget_cap }]", "limits: [{ replicas: -1 }]"), "components.orders-worker.scale.limits[0].replicas", "negative"},
 		{"limit with both", replace("limits: [{ metric: llm_budget_cap }]", "limits: [{ metric: x, replicas: 1 }]"), "components.orders-worker.scale.limits[0]", "one of"},
-		{"task with routes", insertAfter("components:\n", "  mig:\n    kind: task\n    build: mig\n    pool: general\n    request: { cpu: 100m, memory: 128Mi }\n    routes: [/m/]\n"), "components.mig.routes", "only services"},
 		{"task with scale", insertAfter("components:\n", "  mig:\n    kind: task\n    build: mig\n    pool: general\n    request: { cpu: 100m, memory: 128Mi }\n    scale: { max: 2 }\n"), "components.mig.scale", "services and workers"},
 		{"depends on a task", insertAfter("components:\n", "  mig:\n    kind: task\n    build: mig\n    pool: general\n    request: { cpu: 100m, memory: 128Mi }\n"), "", ""},
 		{"depending on a task", func(s string) string {
@@ -640,9 +667,9 @@ func TestDuplicateRoutes(t *testing.T) {
 	s.Components["web"] = &Component{
 		Name: "web", Kind: api.KindService, Build: "web", Context: "web", Pool: "general",
 		Request: Resources{CPU: 100, Memory: 128}, Port: 80, Ready: "/healthz",
-		Routes: []Route{{Host: "shop", Path: "/api/"}},
-		Scale:  &Scale{Min: 1, Max: 1}, Stop: Duration{10 * time.Second},
+		Scale: &Scale{Min: 1, Max: 1}, Stop: Duration{10 * time.Second},
 	}
+	s.Gateway.Upstreams["web"] = &Upstream{Name: "web", Routes: []Route{{Host: "shop", Path: "/api/"}}}
 	var found bool
 	for _, p := range s.Check() {
 		if strings.Contains(p.Msg, "also routed to") {
@@ -660,7 +687,7 @@ func TestProblemsNameTheLine(t *testing.T) {
 	if len(problems) != 1 {
 		t.Fatalf("want one problem, got %v", Problems(problems))
 	}
-	if got := problems[0].String(); got != "line 41: components.api.depends_on[1]: no component mysql" {
+	if got := problems[0].String(); got != "line 47: components.api.depends_on[1]: no component mysql" {
 		t.Errorf("problem %q", got)
 	}
 }
@@ -685,7 +712,6 @@ func TestFingerprint(t *testing.T) {
 	same("port", func(c *Component) { c.Port++ }, "img:c-1", false)
 	same("ready", func(c *Component) { c.Ready = "/x" }, "img:c-1", false)
 	same("ready command", func(c *Component) { c.Ready, c.ReadyCommand = "", []string{"true"} }, "img:c-1", false)
-	same("protocol", func(c *Component) { c.Protocol = "http2" }, "img:c-1", true)
 	same("stop", func(c *Component) { c.Stop.Duration += time.Second }, "img:c-1", false)
 	same("env", func(c *Component) { c.Env = map[string]string{"A": "1"} }, "img:c-1", false)
 	same("secrets", func(c *Component) { c.Secrets = []string{"K"} }, "img:c-1", false)
@@ -698,7 +724,6 @@ func TestFingerprint(t *testing.T) {
 	same("restart, said", func(c *Component) { c.OnSecretChange = &Change{Mode: "restart"} }, "img:c-1", true)
 	same("uses", func(c *Component) { c.Uses = append(c.Uses, "files") }, "img:c-1", true)
 	same("scale", func(c *Component) { c.Scale = &Scale{Min: 1, Max: 99} }, "img:c-1", true)
-	same("routes", func(c *Component) { c.Routes = nil }, "img:c-1", true)
 	same("depends_on", func(c *Component) { c.DependsOn = nil }, "img:c-1", true)
 
 	a := *base
@@ -788,6 +813,8 @@ func TestInfraHash(t *testing.T) {
 		{"scale", replace("      min: 2\n      max: 10\n", "      min: 3\n      max: 10\n"), false},
 		{"request", replace("request: { cpu: 500m, memory: 512Mi }", "request: { cpu: 600m, memory: 512Mi }"), false},
 		{"routes", replace("routes: [shop/api/]", "routes: [shop/v2/]"), false},
+		{"gateway request", replace("  request: { cpu: 500m, memory: 256Mi }\n  hosts:", "  request: { cpu: 600m, memory: 256Mi }\n  hosts:"), false},
+		{"telemetry request", replace("telemetry: {}", "telemetry: { request: { cpu: 400m, memory: 1Gi } }"), false},
 		{"version", replace("protostrap: 1.4.0", "protostrap: 1.5.0"), false},
 		{"uses", replace("uses: [orders]", "uses: [orders, files]"), true},
 		{"pool max", replace("    max: 10\n    spare", "    max: 11\n    spare"), true},
@@ -799,8 +826,14 @@ func TestInfraHash(t *testing.T) {
 		{"bucket in uses", func(s string) string {
 			return replace("uses: [orders]", "uses: [orders, documents]")(withBuckets("  documents: {}\n")(s))
 		}, true},
-		{"hosts", replace("  shop: shop.example.com\n", "  shop: shop.example.com\n  www: www.example.com\n"), true},
-		{"hostname", replace("  shop: shop.example.com\n", "  shop: shop.example.org\n"), true},
+		{"hosts", replace("    shop: shop.example.com\n", "    shop: shop.example.com\n    www: www.example.com\n"), true},
+		{"hostname", replace("    shop: shop.example.com\n", "    shop: shop.example.org\n"), true},
+		{"no tunnel", replace("tunnel: {}\n\n", ""), true},
+		{"no gateway", withoutGateway, true},
+		{"no telemetry", replace("telemetry: {}\n\n", ""), true},
+		{"telemetry volume", replace("telemetry: {}", "telemetry: { volume: 30Gi }"), true},
+		{"telemetry retention", replace("telemetry: {}", "telemetry: { retention: { logs: 7d } }"), true},
+		{"telemetry metrics retention", replace("telemetry: {}", "telemetry: { retention: { metrics: 7d } }"), false},
 		{"volume size", replace("size: 20Gi", "size: 30Gi"), true},
 		{"stateful vm", replace("count: 1 }", "count: 2 }"), true},
 		{"component added", insertAfter("components:\n", "  w2:\n    kind: worker\n    build: w2\n    pool: general\n    request: { cpu: 100m, memory: 128Mi }\n"), true},
@@ -981,20 +1014,32 @@ func TestReadyIsACheckOrACommand(t *testing.T) {
 	}
 }
 
-// What the gateway speaks to a service defaults from its check, so specs written before
-// protocol existed keep their behaviour.
+// What the gateway speaks to a service is its upstream's protocol, which defaults from the
+// service's check, so specs written before protocol existed keep their behaviour. A service
+// off the gateway speaks what its check implies, for the agent's probe.
 func TestUpstreamProtocol(t *testing.T) {
-	for _, tt := range []struct{ ready, protocol, want string }{
-		{"grpc", "", "grpc"},
-		{"grpc:9001", "", "http1"},
-		{"/healthz", "", "http1"},
-		{"/healthz", "http2", "http2"},
-		{"grpc", "http2", "http2"},
-		{"tcp", "grpc", "grpc"},
+	for _, tt := range []struct {
+		ready, protocol string
+		upstream        bool
+		want            string
+	}{
+		{"grpc", "", true, "grpc"},
+		{"grpc:9001", "", true, "http1"},
+		{"/healthz", "", true, "http1"},
+		{"/healthz", "http2", true, "http2"},
+		{"grpc", "http2", true, "http2"},
+		{"tcp", "grpc", true, "grpc"},
+		{"grpc", "", false, "grpc"},
+		{"/healthz", "", false, "http1"},
 	} {
-		c := &Component{Kind: api.KindService, Ready: tt.ready, Protocol: tt.protocol}
-		if got := c.UpstreamProtocol(); got != tt.want {
-			t.Errorf("ready %q, protocol %q: %q, want %q", tt.ready, tt.protocol, got, tt.want)
+		s := &Spec{Gateway: &Gateway{Upstreams: map[string]*Upstream{}}, Components: map[string]*Component{}}
+		c := &Component{Name: "api", Kind: api.KindService, Ready: tt.ready}
+		s.Components["api"] = c
+		if tt.upstream {
+			s.Gateway.Upstreams["api"] = &Upstream{Name: "api", Protocol: tt.protocol}
+		}
+		if got := s.UpstreamProtocol(c); got != tt.want {
+			t.Errorf("ready %q, protocol %q, upstream %v: %q, want %q", tt.ready, tt.protocol, tt.upstream, got, tt.want)
 		}
 	}
 }

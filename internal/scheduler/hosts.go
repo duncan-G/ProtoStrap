@@ -65,11 +65,11 @@ func (s *Scheduler) checkHosts(ctx context.Context, now time.Time) {
 
 // hosts are the target's hosts and their hostnames in this account.
 func (s *Scheduler) hosts(tgt *target) map[string]string {
-	if tgt == nil || len(tgt.spec.Hosts) == 0 {
+	if tgt == nil || len(tgt.spec.Hosts()) == 0 {
 		return nil
 	}
-	out := make(map[string]string, len(tgt.spec.Hosts))
-	for name, hostname := range tgt.spec.Hosts {
+	out := make(map[string]string, len(tgt.spec.Hosts()))
+	for name, hostname := range tgt.spec.Hosts() {
 		if h := s.st.hosts.account[name]; h != "" {
 			hostname = h
 		}
@@ -87,18 +87,30 @@ func hostsEnv(env, hosts map[string]string) {
 	}
 }
 
-// fingerprint is a component's fingerprint at a release, with the account's hostnames:
-// what its replicas should have. Without hosts it is the release's.
+// fingerprint is a component's fingerprint at a release, with the account's hostnames, and
+// whether its output goes to CloudWatch for want of telemetry: what its replicas should
+// have. With telemetry and without hosts it is the release's.
 func (s *Scheduler) fingerprint(tgt *target, component string) string {
-	fp := tgt.rel.Components[component].Fingerprint
-	hosts := s.hosts(tgt)
-	if len(hosts) == 0 || fp == "" {
+	return s.fold(tgt.rel.Components[component].Fingerprint, s.hosts(tgt), !hasTelemetry(tgt))
+}
+
+// edgeFingerprint is what the edge's replicas should have: the release's, with whether its
+// output goes to CloudWatch. The hostnames reach it as files, which it reloads.
+func (s *Scheduler) edgeFingerprint(tgt *target) string {
+	return s.fold(tgt.rel.Edge.Fingerprint, nil, !hasTelemetry(tgt))
+}
+
+// fold folds the hostnames and telemetry's absence into a fingerprint. Neither leaves it
+// as it is, so a running environment's replicas keep the fingerprints they have.
+func (s *Scheduler) fold(fp string, hosts map[string]string, noTelemetry bool) string {
+	if fp == "" || (len(hosts) == 0 && !noTelemetry) {
 		return fp
 	}
 	b, _ := json.Marshal(struct {
 		Fingerprint string            `json:"fingerprint"`
 		Hosts       map[string]string `json:"hosts"`
-	}{fp, hosts})
+		NoTelemetry bool              `json:"no_telemetry,omitempty"`
+	}{fp, hosts, noTelemetry})
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:8])
 }

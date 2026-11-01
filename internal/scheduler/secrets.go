@@ -170,7 +170,11 @@ func (s *Scheduler) checkSecret(ctx context.Context, now time.Time, tgt *target)
 		s.mu.Unlock()
 		return
 	}
-	digests := map[string]string{"edge": s.digest(secret.Keys(all, secret.Edge, nil))}
+	digests := map[string]string{}
+	if tgt.spec.Gateway != nil && tgt.spec.Tunnel != nil {
+		// Only the tunnel reads the edge's keys.
+		digests["edge"] = s.digest(secret.Keys(all, secret.Edge, nil))
+	}
 	for _, c := range tgt.spec.Sorted() {
 		if watched(tgt.spec, c) {
 			digests[c.Name] = s.digest(secret.Keys(all, c.Prefix(), c.Secrets))

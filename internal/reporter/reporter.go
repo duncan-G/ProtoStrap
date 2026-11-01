@@ -1,8 +1,9 @@
 // Package reporter writes the daily report (docs/protostrap.md#reporter): what happened in
 // the last day, and what to change. It reads the infra log from the deploy bucket, the
 // scheduler's decisions and signal snapshots and the agents' warnings, and every
-// component's errors from telemetry's Loki, works out the facts, has an LLM write the
-// report from them, and puts it at reports/<date>.md in the deploy bucket.
+// component's errors from telemetry's Loki, or from CloudWatch Logs when the application
+// runs no telemetry, works out the facts, has an LLM write the report from them, and puts
+// it at reports/<date>.md in the deploy bucket.
 //
 // It is read-only. Without an LLM key, or when the LLM fails, the report is the facts alone.
 package reporter
@@ -33,7 +34,8 @@ type Config struct {
 	Window time.Duration
 }
 
-// Logs is telemetry's Loki, which holds the components' own logs (docs/telemetry.md).
+// Logs holds the components' own logs: telemetry's Loki (docs/telemetry.md), or CloudWatch
+// Logs without telemetry.
 type Logs interface {
 	// Errors returns the lines from from to to that look like errors, each with its
 	// component.
@@ -65,9 +67,12 @@ type Writer interface {
 
 // Deps are the reporter's connections.
 type Deps struct {
-	Logs   Logs
-	Infra  InfraLog
-	Bucket Bucket
+	// Logs is telemetry's Loki, and CloudWatch the components' log groups, which the report
+	// reads when the running release has no telemetry.
+	Logs       Logs
+	CloudWatch Logs
+	Infra      InfraLog
+	Bucket     Bucket
 	// Secret reads the environment's secret, which holds Reporter_ANTHROPIC_API_KEY.
 	Secret func(ctx context.Context) (string, error)
 	LLM    func(key string) Writer
@@ -105,11 +110,15 @@ func Run(ctx context.Context, cfg Config, d Deps) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("reading the infra log: %w", err)
 	}
-	// Without telemetry, the report is still written, and says what it lacks.
-	errLines, err := d.Logs.Errors(ctx, from, to)
+	// While telemetry is down, the report is still written, and says what it lacks.
+	logs, source := d.Logs, "telemetry"
+	if sp != nil && sp.Telemetry == nil && d.CloudWatch != nil {
+		logs, source = d.CloudWatch, "CloudWatch Logs"
+	}
+	errLines, err := logs.Errors(ctx, from, to)
 	unread := ""
 	if err != nil {
-		log.Warn("the components' errors couldn't be read from telemetry", "err", err)
+		log.Warn("the components' errors couldn't be read from "+source, "err", err)
 		unread = err.Error()
 	}
 	facts := gather(records, errLines, sp, from, to)

@@ -1,5 +1,6 @@
 // Package spec reads protostrap.yaml, the one file that describes an application: its
-// pools, its queues, its buckets and its components (docs/protostrap.md#spec). Terraform reads the
+// pools, its tunnel, gateway and telemetry, its queues, its buckets and its components
+// (docs/protostrap.md#spec). Terraform reads the
 // same file for the resources it creates; the scheduler reads it, inside a release, for the
 // replicas it runs.
 //
@@ -21,18 +22,23 @@ import (
 
 // Spec is protostrap.yaml.
 type Spec struct {
-	App        string                `yaml:"app"`
-	ProtoStrap string                `yaml:"protostrap"`
-	Hosts      Hosts                 `yaml:"hosts"`
-	Pools      Pools                 `yaml:"pools"`
-	Edge       Edge                  `yaml:"edge"`
-	Telemetry  Telemetry             `yaml:"telemetry"`
+	App        string `yaml:"app"`
+	ProtoStrap string `yaml:"protostrap"`
+	Pools      Pools  `yaml:"pools"`
+	// Tunnel, Gateway and Telemetry are ProtoStrap's own components. Each is nil when the
+	// spec leaves it out, and then doesn't run.
+	Tunnel     *Tunnel               `yaml:"tunnel"`
+	Gateway    *Gateway              `yaml:"gateway"`
+	Telemetry  *Telemetry            `yaml:"telemetry"`
 	Queues     map[string]*Queue     `yaml:"queues"`
 	Buckets    map[string]*Bucket    `yaml:"buckets"`
 	Email      *Email                `yaml:"email"`
 	Components map[string]*Component `yaml:"components"`
 
 	root *yaml.Node
+	// moved are the fields of a spec written for ProtoStrap 0.1, which Parse read in their
+	// new places, and Check reports.
+	moved []movedField
 }
 
 // Pools are the four VM pools. Compute is nil when the application has no compute pool.
@@ -43,7 +49,8 @@ type Pools struct {
 	Data    DataPool     `yaml:"data"`
 }
 
-// IngressPool is one VM per zone, running the edge and the zone's NAT.
+// IngressPool is one VM per zone, running the zone's NAT, and the gateway and tunnel when
+// the spec has them.
 type IngressPool struct {
 	VM       string    `yaml:"vm"`
 	Reserved Resources `yaml:"reserved"`
@@ -93,9 +100,34 @@ func (r Resources) API() api.Resources {
 	return api.Resources{CPU: int64(r.CPU), Memory: int64(r.Memory)}
 }
 
-// Edge is ProtoStrap's own component, cloudflared and Envoy. Only its request can be set.
-type Edge struct {
+// Tunnel is cloudflared, which brings the requests for the gateway's hosts in from
+// Cloudflare (docs/protostrap.md#tunnel). It runs in the gateway's container on each ingress
+// VM, so it needs the gateway, and the gateway's request covers it. It has no settings:
+// tunnel: {} runs it.
+type Tunnel struct{}
+
+// Gateway is Envoy on each ingress VM, which sends requests for the hosts to the upstreams
+// (docs/protostrap.md#gateway).
+type Gateway struct {
+	// Request is what the gateway's container reserves, the tunnel's cloudflared included.
 	Request Resources `yaml:"request"`
+	// Hosts are the hosts the application answers on.
+	Hosts Hosts `yaml:"hosts"`
+	// Upstreams are the services the gateway sends requests to, by component name.
+	Upstreams map[string]*Upstream `yaml:"upstreams"`
+}
+
+// Upstream is a service the gateway sends requests to: on which routes, how it speaks to
+// it, and who authorizes the requests first.
+type Upstream struct {
+	Name string `yaml:"-"`
+	// Protocol is what the gateway speaks to the service: http1, http2 or grpc. Empty takes
+	// the default: see Spec.UpstreamProtocol.
+	Protocol string  `yaml:"protocol"`
+	Routes   []Route `yaml:"routes"`
+	// Authorize has the gateway ask another service about each request to the routes
+	// before sending it on.
+	Authorize *Authorize `yaml:"authorize"`
 }
 
 // Telemetry is ProtoStrap's own replica on data-1, which keeps the application's logs,
@@ -161,23 +193,16 @@ type Component struct {
 	VM      string    `yaml:"vm"`
 	Request Resources `yaml:"request"`
 	Port    int       `yaml:"port"`
-	// Protocol is what the gateway speaks to a service: http1, http2 or grpc. Empty takes
-	// the default: see UpstreamProtocol.
-	Protocol string `yaml:"protocol"`
 	// Ready is the readiness check, as a spec writes it, such as "grpc" or "9000/healthz",
 	// and ReadyCommand is a command run in the replica instead. Parse sets one of them from
 	// the spec's ready, which ReadyAs holds as written.
-	Ready        string   `yaml:"-"`
-	ReadyCommand []string `yaml:"-"`
-	ReadyAs      readyAs  `yaml:"ready"`
-	Routes       []Route  `yaml:"routes"`
-	// Authorize has the edge ask another service about each request to this one's routes
-	// before sending it on.
-	Authorize *Authorize        `yaml:"authorize"`
-	Metrics   string            `yaml:"metrics"`
-	DependsOn []string          `yaml:"depends_on"`
-	Uses      []string          `yaml:"uses"`
-	Env       map[string]string `yaml:"env"`
+	Ready        string            `yaml:"-"`
+	ReadyCommand []string          `yaml:"-"`
+	ReadyAs      readyAs           `yaml:"ready"`
+	Metrics      string            `yaml:"metrics"`
+	DependsOn    []string          `yaml:"depends_on"`
+	Uses         []string          `yaml:"uses"`
+	Env          map[string]string `yaml:"env"`
 	// Secrets are the keys the component reads from the environment's secret, without their
 	// prefix.
 	Secrets []string `yaml:"secrets"`
@@ -206,8 +231,8 @@ type Component struct {
 	Scale     *Scale   `yaml:"scale"`
 }
 
-// Authorize is a service that answers the edge for another's requests (docs/protostrap.md,
-// "Authorizing requests"). The edge sends it each request's method, path and headers,
+// Authorize is a service that answers the gateway for an upstream's requests
+// (docs/protostrap.md, "Authorizing requests"). The gateway sends it each request's method, path and headers,
 // without the body, to its port at Path followed by the request's own path. A 200 lets the
 // request through, with the authorizer's Headers added to it and its Respond headers added
 // to the service's response; anything else is the response.
@@ -247,9 +272,9 @@ func (a *Authorize) CheckPath() string {
 }
 
 // Hosts names each host the application answers on, with its hostname, such as
-// { admin: admin.example.com }. The rest of the spec refers to a host by its name, so it
-// means the same in every account, and an account's Terraform config may give the names
-// other hostnames (docs/protostrap.md, "Hosts").
+// { admin: admin.example.com }. Routes refer to a host by its name, so they mean the same in
+// every account, and an account's Terraform config may give the names other hostnames
+// (docs/protostrap.md, "Hosts").
 type Hosts map[string]string
 
 func (h *Hosts) UnmarshalYAML(n *yaml.Node) error {
@@ -356,16 +381,45 @@ const (
 	ProtocolGRPC = "grpc"
 )
 
-// UpstreamProtocol is what the gateway speaks to the service: its protocol, or grpc when
-// its check is gRPC on its own port, otherwise http1.
-func (c *Component) UpstreamProtocol() string {
-	switch {
-	case c.Protocol != "":
-		return c.Protocol
+// UpstreamProtocol is what the gateway speaks to a service: its upstream's protocol, or
+// grpc when its check is gRPC on its own port, otherwise http1. A service off the gateway
+// speaks what its check implies, which the agent's probe uses.
+func (s *Spec) UpstreamProtocol(c *Component) string {
+	switch u := s.Upstream(c.Name); {
+	case u != nil && u.Protocol != "":
+		return u.Protocol
 	case c.Ready == probe.CheckGRPC:
 		return ProtocolGRPC
 	}
 	return ProtocolHTTP1
+}
+
+// Hosts are the gateway's hosts, or nil without a gateway.
+func (s *Spec) Hosts() Hosts {
+	if s.Gateway == nil {
+		return nil
+	}
+	return s.Gateway.Hosts
+}
+
+// Upstream is the component's entry in the gateway's upstreams, or nil if it has none.
+func (s *Spec) Upstream(name string) *Upstream {
+	if s.Gateway == nil {
+		return nil
+	}
+	return s.Gateway.Upstreams[name]
+}
+
+// Upstreams are the gateway's upstreams in name order, or nil without any.
+func (s *Spec) Upstreams() []*Upstream {
+	if s.Gateway == nil || len(s.Gateway.Upstreams) == 0 {
+		return nil
+	}
+	out := make([]*Upstream, 0, len(s.Gateway.Upstreams))
+	for _, name := range sortedKeys(s.Gateway.Upstreams) {
+		out = append(out, s.Gateway.Upstreams[name])
+	}
+	return out
 }
 
 // Migrate is what runs once per release before a component's new replicas: a task, by
@@ -546,7 +600,7 @@ var (
 	// defaultDataReserve keeps back no CPU: stateful components get cores of their own, and
 	// the agent and scheduler share those cores.
 	defaultDataReserve = Resources{CPU: 0, Memory: 1024}
-	defaultEdge        = Resources{CPU: 500, Memory: 256}
+	defaultGateway     = Resources{CPU: 500, Memory: 256}
 	defaultStop        = 10 * time.Second
 	// The telemetry replica's defaults are in docs/telemetry.md#settings.
 	defaultTelemetry          = Resources{CPU: 500, Memory: 1536}
@@ -576,12 +630,119 @@ func Parse(src []byte) (*Spec, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &Spec{root: root}
+	moved, err := upgrade(root)
+	if err != nil {
+		return nil, err
+	}
+	s := &Spec{root: root, moved: moved}
 	if err := yaml.Decode(root, s); err != nil {
 		return nil, err
 	}
 	s.defaults()
 	return s, nil
+}
+
+// movedField is a field of a spec written for ProtoStrap 0.1, where it was, and where it
+// went.
+type movedField struct {
+	Path string
+	Line int
+	Msg  string
+}
+
+// upgrade reads a spec written for ProtoStrap 0.1 as this one: its hosts and the edge's
+// request go to the gateway, a service's routes, protocol and authorizer to its upstream,
+// and the tunnel and telemetry, which always ran, are on. A scheduler reads the releases it
+// finds running, so their specs must still load; Check reports each field, so a spec isn't
+// written that way again. A spec with both the old places and the new is neither, and isn't
+// read.
+func upgrade(root *yaml.Node) ([]movedField, error) {
+	if root == nil || root.Kind != yaml.MapNode {
+		return nil, nil
+	}
+	var moved []movedField
+	add := func(k *yaml.Node, path, msg string) {
+		moved = append(moved, movedField{Path: path, Line: k.Line, Msg: msg})
+	}
+	if k := root.KeyNode("hosts"); k != nil {
+		add(k, "hosts", "moved to gateway.hosts")
+	}
+	if k := root.KeyNode("edge"); k != nil {
+		add(k, "edge", "is now the tunnel and the gateway: its request is gateway.request")
+	}
+	type upstream struct {
+		name string
+		at   int
+		node *yaml.Node
+	}
+	var upstreams []upstream
+	if components := root.Get("components"); components != nil && components.Kind == yaml.MapNode {
+		for _, c := range components.Pairs {
+			if c.Value == nil || c.Value.Kind != yaml.MapNode {
+				continue
+			}
+			u := &yaml.Node{Kind: yaml.MapNode, Line: c.Key.Line, Column: c.Key.Column}
+			kept := c.Value.Pairs[:0:0]
+			for _, p := range c.Value.Pairs {
+				switch field := p.Key.Value; field {
+				case "routes", "protocol", "authorize":
+					name := c.Key.Value
+					add(p.Key, "components."+name+"."+field, fmt.Sprintf("moved to gateway.upstreams.%s.%s", name, field))
+					u.Pairs = append(u.Pairs, p)
+				default:
+					kept = append(kept, p)
+				}
+			}
+			if len(u.Pairs) > 0 {
+				c.Value.Pairs = kept
+				upstreams = append(upstreams, upstream{c.Key.Value, c.Key.Line, u})
+			}
+		}
+	}
+	if len(moved) == 0 {
+		return nil, nil
+	}
+	for _, section := range []string{"tunnel", "gateway"} {
+		if k := root.KeyNode(section); k != nil {
+			m := moved[0]
+			return nil, &yaml.Error{Line: m.Line, Msg: fmt.Sprintf("%s: %s, and the spec has %s too: write each field in its new place", m.Path, m.Msg, section)}
+		}
+	}
+
+	at := func(n *yaml.Node, key string) *yaml.Node {
+		return &yaml.Node{Kind: yaml.ScalarNode, Value: key, Line: n.Line, Column: n.Column}
+	}
+	gateway := &yaml.Node{Kind: yaml.MapNode, Line: moved[0].Line}
+	if edge := root.Get("edge"); edge != nil {
+		if r := edge.Get("request"); r != nil {
+			gateway.Pairs = append(gateway.Pairs, yaml.Pair{Key: at(edge.KeyNode("request"), "request"), Value: r})
+		}
+	}
+	if hosts := root.Get("hosts"); hosts != nil {
+		gateway.Pairs = append(gateway.Pairs, yaml.Pair{Key: at(root.KeyNode("hosts"), "hosts"), Value: hosts})
+	}
+	if len(upstreams) > 0 {
+		m := &yaml.Node{Kind: yaml.MapNode, Line: upstreams[0].at}
+		for _, u := range upstreams {
+			m.Pairs = append(m.Pairs, yaml.Pair{Key: at(u.node, u.name), Value: u.node})
+		}
+		gateway.Pairs = append(gateway.Pairs, yaml.Pair{Key: at(m, "upstreams"), Value: m})
+	}
+	pairs := root.Pairs[:0:0]
+	for _, p := range root.Pairs {
+		if p.Key.Value != "hosts" && p.Key.Value != "edge" {
+			pairs = append(pairs, p)
+		}
+	}
+	empty := func() *yaml.Node { return &yaml.Node{Kind: yaml.MapNode, Line: gateway.Line} }
+	pairs = append(pairs,
+		yaml.Pair{Key: at(gateway, "tunnel"), Value: empty()},
+		yaml.Pair{Key: at(gateway, "gateway"), Value: gateway})
+	if root.KeyNode("telemetry") == nil {
+		pairs = append(pairs, yaml.Pair{Key: at(gateway, "telemetry"), Value: empty()})
+	}
+	root.Pairs = pairs
+	return moved, nil
 }
 
 // has reports whether the spec sets the value at path, such as "pools.general.spare".
@@ -613,22 +774,33 @@ func (s *Spec) defaults() {
 	if !s.has("pools.data.reserved") {
 		s.Pools.Data.Reserved = defaultDataReserve
 	}
-	if !s.has("edge.request") {
-		s.Edge.Request = defaultEdge
+	if g := s.Gateway; g != nil {
+		if !s.has("gateway.request") {
+			g.Request = defaultGateway
+		}
+		for name, u := range g.Upstreams {
+			if u == nil {
+				u = &Upstream{}
+				g.Upstreams[name] = u
+			}
+			u.Name = name
+		}
 	}
-	if !s.has("telemetry.request") {
-		s.Telemetry.Request = defaultTelemetry
-	}
-	if !s.has("telemetry.volume") {
-		s.Telemetry.Volume = defaultTelemetryVolume
-	}
-	for field, set := range map[string]func(){
-		"logs":    func() { s.Telemetry.Retention.Logs = defaultTelemetryRetention.Logs },
-		"traces":  func() { s.Telemetry.Retention.Traces = defaultTelemetryRetention.Traces },
-		"metrics": func() { s.Telemetry.Retention.Metrics = defaultTelemetryRetention.Metrics },
-	} {
-		if !s.has("telemetry.retention." + field) {
-			set()
+	if t := s.Telemetry; t != nil {
+		if !s.has("telemetry.request") {
+			t.Request = defaultTelemetry
+		}
+		if !s.has("telemetry.volume") {
+			t.Volume = defaultTelemetryVolume
+		}
+		for field, set := range map[string]func(){
+			"logs":    func() { t.Retention.Logs = defaultTelemetryRetention.Logs },
+			"traces":  func() { t.Retention.Traces = defaultTelemetryRetention.Traces },
+			"metrics": func() { t.Retention.Metrics = defaultTelemetryRetention.Metrics },
+		} {
+			if !s.has("telemetry.retention." + field) {
+				set()
+			}
 		}
 	}
 	for name, q := range s.Queues {

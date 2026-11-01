@@ -15,11 +15,10 @@ public class ComponentKindTests
     {
         using var repo = new FixtureRepo();
         var builder = TestApp.Publish(repo);
-        builder.AddEnvironment().WithHost("app", "protofast.dev", local: "app.dev.localhost");
+        builder.AddEnvironment();
         builder.AddProject("api", repo.Project("services/api/src/ProtoFast.Api/ProtoFast.Api.csproj", "Microsoft.NET.Sdk.Web"))
             .PublishAsProtoStrapService(s => s
                 .Request(cpu: "500m", memory: "512Mi")
-                .Routes("app/api/")
                 .Ready(Readiness.Grpc)
                 .Stop(TimeSpan.FromSeconds(30))
                 .Scale(min: 2, max: 10, demand => demand.Cpu(0.70)));
@@ -37,7 +36,6 @@ public class ComponentKindTests
               request: { cpu: 500m, memory: 512Mi }
               port: 8080
               ready: grpc
-              routes: [app/api/]
               env:
                 OTEL_DOTNET_EXPERIMENTAL_OTLP_RETRY: in_memory
               stop: 30s
@@ -51,20 +49,20 @@ public class ComponentKindTests
     {
         using var repo = new FixtureRepo();
         var builder = TestApp.Publish(repo);
-        builder.AddEnvironment().WithHost("app", "protofast.dev", local: "app.dev.localhost");
-        builder.AddProject("api", repo.Project("services/api/Api.csproj", "Microsoft.NET.Sdk.Web"))
+        var gateway = builder.AddEnvironment().AddEnvoyGateway("gateway").WithHost("app", "protofast.dev", local: "app.dev.localhost");
+        var api = builder.AddProject("api", repo.Project("services/api/Api.csproj", "Microsoft.NET.Sdk.Web"))
             .WithHttpEndpoint(targetPort: 8080, name: "http")
             .PublishAsProtoStrapService(s => s
                 .Pool(Pool.Compute)
                 .Request(cpu: "1", memory: "1Gi")
-                .Routes("app/api/", "/healthz/")
-                .Route("/py/", rate: 200)
                 .Ready("/ready")
                 .Metrics(port: 9090, path: "/metrics")
                 .Stop(TimeSpan.FromMinutes(2))
                 .Scale(min: 1, max: 8,
                     demand => demand.Requests(20).Cpu(0.7).Metric("nodejs_eventloop_lag_seconds", target: 0.05),
                     limits => limits.Replicas(6).Metric("llm_budget_cap")));
+        // A requests signal is for one of the gateway's upstreams.
+        gateway.WithUpstream(api, u => u.Routes("app/api/", "/healthz/").Route("/py/", rate: 200));
 
         var yaml = await TestApp.GenerateYamlAsync(builder);
 
@@ -79,7 +77,6 @@ public class ComponentKindTests
               request: { cpu: 1000m, memory: 1Gi }
               port: 8080
               ready: /ready
-              routes: [app/api/, /healthz/, { route: /py/, rate: 200/s }]
               metrics: 9090/metrics
               env:
                 ASPNETCORE_FORWARDEDHEADERS_ENABLED: "true"
@@ -281,7 +278,7 @@ public class ComponentKindTests
         var builder = TestApp.Run(repo);
         builder.AddEnvironment();
 
-        // Under `aspire run` the local edge reads a service's routes, so the call is kept, but
+        // Under `aspire run` the local gateway reads a service's settings, so the call is kept, but
         // nothing runs it until then, and sources mean nothing.
         var api = builder.AddProject("api", repo.Project("services/api/Api.csproj", "Microsoft.NET.Sdk.Web"))
             .PublishAsProtoStrapService(_ => throw new InvalidOperationException("ran in run mode"))
@@ -310,11 +307,10 @@ public class ComponentKindTests
     {
         using var repo = new FixtureRepo();
         var builder = TestApp.Publish(repo);
-        builder.AddEnvironment().WithHost("app", "protofast.dev", local: "app.dev.localhost");
-        builder.AddProject("api", repo.Project("services/api/Api.csproj", "Microsoft.NET.Sdk.Web"))
+        var gateway = builder.AddEnvironment().AddEnvoyGateway("gateway").WithHost("app", "protofast.dev", local: "app.dev.localhost");
+        var api = builder.AddProject("api", repo.Project("services/api/Api.csproj", "Microsoft.NET.Sdk.Web"))
             .PublishAsProtoStrapService(s => s
                 .Request(cpu: "lots", memory: "0Mi")
-                .Routes("auth/", "", "protofast.dev/api/")
                 .Ready("healthz")
                 .Metrics(port: 0)
                 .Stop(TimeSpan.FromHours(2))
@@ -322,6 +318,7 @@ public class ComponentKindTests
         builder.AddProject("worker", repo.Project("services/worker/Worker.csproj"))
             .PublishAsProtoStrapWorker(w => w.Request(cpu: "250m", memory: "256Mi")
                 .Scale(min: -1, max: 0, demand => demand.Cpu(0.5), limits => limits.Replicas(-1).Metric("")));
+        gateway.WithUpstream(api, u => u.Routes("auth/", "", "protofast.dev/api/"));
 
         var problems = await TestApp.ProblemsAsync(builder);
 
@@ -330,9 +327,6 @@ public class ComponentKindTests
             "api: Request: cpu \"lots\" isn't CPU, like \"500m\" or \"2\"",
             "api: Request: memory must be above 0",
             "api: Ready: \"healthz\" must be Readiness.Grpc, Readiness.Tcp or an HTTP path such as \"/healthz\"",
-            "api: Routes: no host auth: call WithHost(\"auth\", ...)",
-            "api: Routes: an empty route",
-            "api: Routes: a route names its host by its name, such as app/api/, not protofast.dev",
             "api: Metrics: port 0 must be 1 to 65535",
             "api: Stop: 2h is more than 1h",
             "api: Scale: max 2 is below min 3",
@@ -344,6 +338,9 @@ public class ComponentKindTests
             "worker: Scale: max 0 must be at least 1",
             "worker: Scale: a replicas limit of -1 is negative",
             "worker: Scale: \"\" isn't a metric name",
+            "api: Routes: no host auth: call WithHost(\"auth\", ...) on gateway",
+            "api: Routes: an empty route",
+            "api: Routes: a route names its host by its name, such as app/api/, not protofast.dev",
         ], problems);
     }
 
@@ -365,7 +362,7 @@ public class ComponentKindTests
             "api: no request: call Request(cpu: ..., memory: ...)",
             "api: no readiness check: call Ready(Readiness.Grpc) or Ready(\"/healthz\"), or WithHttpHealthCheck(\"/healthz\")",
             "jobs: no request: call Request(cpu: ..., memory: ...)",
-            "jobs: Scale: a requests signal is counted by the gateway, so only a service with routes has one",
+            "jobs: Scale: a requests signal is counted by the gateway, so only one of its upstreams has one",
         ], problems);
     }
 

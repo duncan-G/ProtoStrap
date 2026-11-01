@@ -9,7 +9,8 @@
 #             Dockerfile's steps under QEMU, and the SDK cross-builds without it.
 #   release   It copies what VMs need into the account, if it isn't there yet: the
 #             protostrap binary of the release's version (which the infra workflow
-#             usually published, so VMs boot with their agent), the edge and telemetry images,
+#             usually published, so VMs boot with their agent), the edge and telemetry images
+#             when the spec runs them,
 #             and every stateful component's upstream image, since VMs never pull from
 #             Docker Hub. It writes releases/<commit>.json, sends protostrap-deploy
 #             <commit> to data-1 through SSM, and waits for its result: done, or failed
@@ -175,12 +176,22 @@ jobs:
           SOURCE: ${{ steps.source.outputs.dir }}
         run: '"$SOURCE/.github/actions/protostrap/publish.sh" "$BINARY" "$VERSION" "$DEPLOY_BUCKET"'
 
+      # The plan names the edge's and telemetry's images when the spec runs them.
+      - name: The plan
+        run: |
+          set -euo pipefail
+          protostrap plan --spec "$SPEC" --registry "$REGISTRY" --version "$VERSION" --json > plan.json
+
       - name: The edge image
         env:
           SOURCE: ${{ steps.source.outputs.dir }}
           BINARY: ${{ steps.cli.outputs.vm-binary || steps.cli-external.outputs.vm-binary }}
         run: |
           set -euo pipefail
+          if [ -z "$(jq -r .edge plan.json)" ]; then
+            echo "the spec has no gateway: no edge image"
+            exit 0
+          fi
           if aws ecr describe-images --repository-name protostrap/edge --image-ids "imageTag=$VERSION" >/dev/null 2>&1; then
             echo "edge $VERSION is in ECR"
             exit 0
@@ -196,6 +207,10 @@ jobs:
           BINARY: ${{ steps.cli.outputs.vm-binary || steps.cli-external.outputs.vm-binary }}
         run: |
           set -euo pipefail
+          if [ -z "$(jq -r .telemetry plan.json)" ]; then
+            echo "the spec has no telemetry: no telemetry image"
+            exit 0
+          fi
           if aws ecr describe-images --repository-name protostrap/telemetry --image-ids "imageTag=$VERSION" >/dev/null 2>&1; then
             echo "telemetry $VERSION is in ECR"
             exit 0
@@ -208,7 +223,6 @@ jobs:
       - name: Stateful components' images
         run: |
           set -euo pipefail
-          protostrap plan --spec "$SPEC" --registry "$REGISTRY" --version "$VERSION" --json > plan.json
           jq -c '.stateful[]' plan.json | while read -r s; do
             component=$(jq -r .component <<<"$s")
             upstream=$(jq -r .upstream <<<"$s")

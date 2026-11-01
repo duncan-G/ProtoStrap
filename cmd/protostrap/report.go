@@ -51,9 +51,10 @@ func runReport(args []string, out io.Writer) int {
 	}
 	secrets := &aws.SecretsManager{Region: cfg.Region, Credentials: creds}
 	key, err := reporter.Run(ctx, reporter.Config{App: cfg.App, Environment: cfg.Environment, DeployBucket: cfg.DeployBucket, Window: *window}, reporter.Deps{
-		Logs:   &reporter.Loki{Client: telemetry.SocketClient(telemetry.GrafanaSocket), Base: "http://grafana"},
-		Infra:  &infralog.Archive{Bucket: &aws.S3{Region: cfg.Region, Credentials: creds}, Name: cfg.DeployBucket},
-		Bucket: bucket,
+		Logs:       &reporter.Loki{Client: telemetry.SocketClient(telemetry.GrafanaSocket), Base: "http://grafana"},
+		CloudWatch: &reporter.CloudWatch{Logs: &aws.Logs{Region: cfg.Region, Credentials: creds}, App: cfg.App},
+		Infra:      &infralog.Archive{Bucket: &aws.S3{Region: cfg.Region, Credentials: creds}, Name: cfg.DeployBucket},
+		Bucket:     bucket,
 		Secret: func(ctx context.Context) (string, error) {
 			// The key is in the environment's secret; a config without an environment names
 			// the reporter's own.

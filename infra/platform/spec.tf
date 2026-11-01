@@ -1,9 +1,10 @@
 # This file reads the spec and derives the names everything else is built from.
 #
 # Terraform reads only the infra projection of the spec (docs/protostrap-aspire.md,
-# "Infrastructure projection"): the hosts and their hostnames, each pool's VM types and size limits, the
-# queues, the buckets, each component's kind, uses, queue signals, data VM and volume, and
-# telemetry's volume and the retention of its logs and traces. The infra
+# "Infrastructure projection"): whether it has the tunnel, the gateway and telemetry, the
+# gateway's hosts and their hostnames, each pool's VM types and size limits, the queues, the
+# buckets, each component's kind, uses, queue signals, data VM and volume, and telemetry's
+# volume and the retention of its logs and traces. The infra
 # workflow has already run `protostrap check` on the whole file, so Terraform reads it
 # without second-guessing it.
 
@@ -23,9 +24,15 @@ locals {
   partition = data.aws_partition.current.partition
   zones     = length(var.zones) > 0 ? var.zones : [data.aws_availability_zones.available.names[0]]
 
-  # These are the application's hosts (docs/protostrap.md, "Hosts"): each of the spec's names
-  # with its hostname in this account, and the hostnames alone.
-  spec_hosts = try(local.spec.hosts, null) == null ? {} : { for name, hostname in local.spec.hosts : name => hostname }
+  # These are ProtoStrap's own components (docs/protostrap.md): each runs only when the spec
+  # has its section. `tunnel: {}` reads as an empty object, which isn't null.
+  has_tunnel    = try(local.spec.tunnel, null) != null
+  has_gateway   = try(local.spec.gateway, null) != null
+  has_telemetry = try(local.spec.telemetry, null) != null
+
+  # These are the application's hosts (docs/protostrap.md, "Hosts"): each of the gateway's
+  # names with its hostname in this account, and the hostnames alone.
+  spec_hosts = try(local.spec.gateway.hosts, null) == null ? {} : { for name, hostname in local.spec.gateway.hosts : name => hostname }
   hostnames  = var.hosts != null ? var.hosts : local.spec_hosts
   hosts      = sort(values(local.hostnames))
 

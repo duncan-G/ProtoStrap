@@ -175,7 +175,7 @@ func TestALocalGRPCCheckDoesntNameTheService(t *testing.T) {
 	}
 }
 
-// The local edge logs each request it routes to its console, the AppHost's dashboard, so a
+// The local gateway logs each request it routes to its console, the AppHost's dashboard, so a
 // developer sees what the edge did with it: the host and path (without the query, which may
 // hold a sign-in's code), where it went, and Envoy's response flags, such as UAEX for a request
 // the authorizer refused or NR for one no route matched. An account's edge logs nothing.

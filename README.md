@@ -74,6 +74,9 @@ Each self-managed component declares:
 | **KV store**    | Redis                                                                | Data    | Key-value store                                                         |
 | **Telemetry**   | OpenTelemetry collector, Loki, Tempo, Prometheus, Grafana            | Data    | Logs, traces and metrics, and a place to read them ([Telemetry](docs/telemetry.md)) |
 
+The CDN tunnel, the API gateway and telemetry are ProtoStrap's own, and each runs only when
+the spec has it: `tunnel`, `gateway` and `telemetry` ([Spec](docs/protostrap.md#spec)).
+
 ### Managed
 
 | Component              | Service             | Provides                          |
@@ -130,8 +133,8 @@ EC2 instances for data, from launch to recovery, is in [VMs on AWS](docs/vms.md)
 The swarm manager runs on the data VM, because the data VM is never removed. If it is
 down, running containers keep working, but new replicas can't join the overlay network
 until it is back. VMs allow Swarm's traffic between each other on the private network only
-(TCP 2377, TCP and UDP 7946, UDP 4789), and Docker sends every replica's output to the
-[telemetry](docs/telemetry.md) collector on the data VM (TCP 24224).
+(TCP 2377, TCP and UDP 7946, UDP 4789), and, with telemetry, Docker sends every replica's
+output to the [telemetry](docs/telemetry.md) collector on the data VM (TCP 24224).
 
 
 ## How components connect
@@ -168,7 +171,8 @@ until it is back. VMs allow Swarm's traffic between each other on the private ne
 - **Telemetry.** Docker sends every replica's output to the telemetry collector on the data
   VM, and services that use OpenTelemetry send it their logs, traces and metrics over the
   overlay network. Services can send telemetry but can't read it. People read it in
-  Grafana, through an SSM port forward (see [Telemetry](docs/telemetry.md)).
+  Grafana, through an SSM port forward (see [Telemetry](docs/telemetry.md)). Without
+  telemetry, Docker sends replicas' output to CloudWatch Logs instead.
 
 The address ranges, subnets, firewall rules, DNS and Cloudflare settings behind these paths
 are in [Network](docs/network.md).

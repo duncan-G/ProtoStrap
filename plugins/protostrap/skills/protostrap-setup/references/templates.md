@@ -39,7 +39,7 @@ variable "github_repository" {
 }
 variable "cloudflare_account_id" { type = string }
 variable "cloudflare_zone" { type = string }
-variable "hosts" { type = map(string) } # each of the spec's hosts' hostname in this account
+variable "hosts" { type = map(string) } # each of the spec's gateway.hosts' hostname in this account
 variable "alert_emails" {
   type    = list(string)
   default = []
@@ -112,7 +112,7 @@ terraform {
 
 variable "cloudflare_account_id" { type = string }
 variable "cloudflare_zone" { type = string }
-variable "hosts" { type = map(string) } # each of the spec's hosts' hostname in this account
+variable "hosts" { type = map(string) } # each of the spec's gateway.hosts' hostname in this account
 variable "alert_emails" {
   type    = list(string)
   default = []
@@ -142,7 +142,9 @@ module "protostrap" {
 ```
 
 Other inputs worth knowing: `zones`, `vpc_cidr` (can't change later), `cors_origins`,
-`retired_components`, `retired_queues`, `retired_buckets`, `extra_egress`, `operator_hosts`.
+`retired_components`, `retired_queues`, `retired_buckets`, `extra_egress`, `operator_hosts`
+(only with the spec's `tunnel`). `client_rate_limit` is Cloudflare's, so it applies only with
+a tunnel.
 
 ## infra/people/main.tf
 
@@ -182,7 +184,7 @@ module "people" {
   source = "github.com/duncan-G/protostrap//infra/people?ref=v0.1.1"
 
   # Developers see the account read-only, manage dev's secret, shop/dev, beside prod's, and
-  # open Grafana.
+  # open Grafana when the spec has telemetry.
   accounts = var.accounts
 }
 

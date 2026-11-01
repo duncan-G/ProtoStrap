@@ -1,4 +1,3 @@
-using System.Globalization;
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.Pipelines;
 using ProtoStrap.Hosting;
@@ -8,7 +7,9 @@ namespace Aspire.Hosting;
 
 /// <summary>
 /// These extension methods add the ProtoStrap environment to an AppHost, and set what becomes
-/// the top of protostrap.yaml: the app, the ProtoStrap version, the hosts, the pools and the edge.
+/// the top of protostrap.yaml: the app, the ProtoStrap version and the pools. ProtoStrap's own
+/// components are added to it with AddEnvoyGateway, AddCloudflareTunnel and AddTelemetry
+/// (ProtoStrapGatewayExtensions).
 /// </summary>
 public static class ProtoStrapEnvironmentExtensions
 {
@@ -57,36 +58,6 @@ public static class ProtoStrapEnvironmentExtensions
     }
 
     /// <summary>
-    /// WithHost adds a host the application answers on (docs/protostrap.md, "Hosts"). Routes
-    /// refer to it by its name, such as "admin/", so they mean the same in every account; an
-    /// account's Terraform config may give the name another hostname. Every replica learns the
-    /// hostname as HOST_&lt;NAME&gt; and its origin as ORIGIN_&lt;NAME&gt;, and so does every
-    /// resource under `aspire run`, with the local hostname.
-    /// </summary>
-    /// <param name="builder">It is the environment.</param>
-    /// <param name="name">It is the host's name: lowercase letters, digits and dashes, such as admin.</param>
-    /// <param name="hostname">It is the spec's hostname, such as admin.example.com.</param>
-    /// <param name="local">It is the hostname under `aspire run`, such as admin.dev.localhost.</param>
-    public static IResourceBuilder<ProtoStrapEnvironmentResource> WithHost(
-        this IResourceBuilder<ProtoStrapEnvironmentResource> builder, string name, string hostname, string local)
-    {
-        var first = builder.Resource.HostSettings.Count == 0;
-        builder.Resource.HostSettings.Add(new(name, hostname, local));
-        if (first && !builder.ApplicationBuilder.ExecutionContext.IsPublishMode)
-        {
-            var environment = builder.Resource;
-            builder.ApplicationBuilder.Eventing.Subscribe<BeforeStartEvent>((e, _) =>
-            {
-                AddHostVariables(e.Model.Resources, environment);
-                return Task.CompletedTask;
-            });
-            if (environment.LocalEdge is null)
-                LocalEdge.Add(builder.ApplicationBuilder, environment);
-        }
-        return builder;
-    }
-
-    /// <summary>
     /// AddSecretVariables gives every process a ProtoStrap component runs under `aspire run` the
     /// variables ProtoStrap gives each replica for its environment's secret: its id, the
     /// component's prefix (its secret_prefix, or its name in PascalCase and _), and the region,
@@ -114,52 +85,8 @@ public static class ProtoStrapEnvironmentExtensions
     }
 
     /// <summary>
-    /// WithLocalEdge sets the port the edge serves the hosts' local hostnames on under `aspire
-    /// run`, 20000 by default: browsers open http://&lt;local hostname&gt;:&lt;port&gt;. The edge
-    /// is the Envoy ProtoStrap runs in an account, rendered by `protostrap edge render`.
-    /// </summary>
-    public static IResourceBuilder<ProtoStrapEnvironmentResource> WithLocalEdge(
-        this IResourceBuilder<ProtoStrapEnvironmentResource> builder, int port)
-    {
-        ArgumentOutOfRangeException.ThrowIfLessThan(port, 1);
-        ArgumentOutOfRangeException.ThrowIfGreaterThan(port, 65535);
-        builder.Resource.LocalEdgePort = port;
-        if (builder.ApplicationBuilder.ExecutionContext.IsPublishMode)
-            return builder;
-        if (builder.Resource.LocalEdge is { } edge)
-            edge.Annotations.OfType<EndpointAnnotation>().Single(e => e.Name == "http").Port = port;
-        else
-            LocalEdge.Add(builder.ApplicationBuilder, builder.Resource);
-        return builder;
-    }
-
-    /// <summary>
-    /// AddHostVariables gives every resource that takes environment variables each host's
-    /// local hostname and origin under `aspire run`, as ProtoStrap gives every replica the
-    /// account's.
-    /// </summary>
-    internal static void AddHostVariables(IEnumerable<IResource> resources, ProtoStrapEnvironmentResource environment)
-    {
-        foreach (var resource in resources.OfType<IResourceWithEnvironment>().Where(r => r is IComputeResource && r != environment.LocalEdge).ToList())
-        {
-            resource.Annotations.Add(new EnvironmentCallbackAnnotation(context =>
-            {
-                var port = environment.LocalEdgePort.ToString(CultureInfo.InvariantCulture);
-                foreach (var host in environment.HostSettings)
-                {
-                    context.EnvironmentVariables[HostVariable("HOST_", host.Name)] = host.Local;
-                    context.EnvironmentVariables[HostVariable("ORIGIN_", host.Name)] = $"http://{host.Local}:{port}";
-                }
-            }));
-        }
-    }
-
-    private static string HostVariable(string prefix, string name) =>
-        prefix + name.Replace('-', '_').ToUpper(CultureInfo.InvariantCulture);
-
-    /// <summary>
-    /// WithIngressPool sets the ingress pool: one VM of this type per zone, running the edge and
-    /// the zone's NAT.
+    /// WithIngressPool sets the ingress pool: one VM of this type per zone, running the zone's
+    /// NAT, and the gateway and tunnel when the environment has them.
     /// </summary>
     /// <param name="builder">It is the environment.</param>
     /// <param name="vm">It is the instance type, such as c8g.medium.</param>
@@ -229,17 +156,6 @@ public static class ProtoStrapEnvironmentExtensions
     }
 
     /// <summary>
-    /// WithEdge sets what the edge, cloudflared and Envoy on each ingress VM, reserves. The
-    /// reservation must fit the ingress VM, and defaults to 500m and 256Mi.
-    /// </summary>
-    public static IResourceBuilder<ProtoStrapEnvironmentResource> WithEdge(
-        this IResourceBuilder<ProtoStrapEnvironmentResource> builder, string cpu, string memory)
-    {
-        builder.Resource.Edge = new(cpu, memory);
-        return builder;
-    }
-
-    /// <summary>
     /// WithSpecPath sets where protostrap.yaml goes, relative to the AppHost's directory. The path
     /// defaults to the root of the git repository the AppHost is in. Paths in the spec are
     /// relative to the spec's directory, so everything a component is built from must be inside it.
@@ -254,7 +170,7 @@ public static class ProtoStrapEnvironmentExtensions
     /// <summary>
     /// WithCheck sets the protostrap binary that runs `protostrap check` on the spec once it is
     /// written: a name on PATH or a path. It defaults to protostrap, and the check is skipped if
-    /// the binary isn't found. With null, the spec is never checked. The local edge renders with
+    /// the binary isn't found. With null, the spec is never checked. The local gateway renders with
     /// a binary this names; for the default, protostrap-build builds protostrap from the ProtoStrap
     /// checkout this package is built from, and only without the checkout or Go is protostrap on
     /// PATH used. Both warn when a binary they find isn't the AppHost's version.

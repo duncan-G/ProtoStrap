@@ -31,9 +31,10 @@ merge to main
            missing from ECR; whether the infra projection changed since the last apply
   infra    only if it changed, after prod-infra's own approval: Terraform applies
            infra/prod (ECR repositories, roles, queues, buckets, DNS, VMs)
-  deploy   builds the missing images (arm64), copies ProtoStrap's binary, edge, telemetry
-           and upstream images, writes releases/<commit>.json, and has data-1's scheduler
-           roll it out, waiting for the result
+  deploy   builds the missing images (arm64), copies ProtoStrap's binary, the edge and
+           telemetry images the spec runs, and upstream images, writes
+           releases/<commit>.json, and has data-1's scheduler roll it out, waiting for the
+           result
 ```
 
 The rollout: changed components replace a quarter of their replicas at a time, migrations
@@ -54,6 +55,7 @@ components aren't touched.
 | Something outside the Infra boundary, such as a managed database | An Org Admin widens bootstrap's `extra_infra_actions` and applies it      |
 | A migration                                         | It works with the previous release's code, which runs during the rollout and after a rollback |
 | A new ProtoStrap version                            | Every reference moved together (protostrap-setup's upgrade steps)              |
+| `tunnel: {}` added                                  | Plan the tunnel's token: once Terraform has made the tunnel, an Org Admin sets `Edge_TUNNEL_TOKEN` with `scripts/set-edge-token.sh` (protostrap-secrets), before the deploy. Without it the new edge waits for the token and never gets ready, so the release rolls back after 5 minutes and the old edge keeps serving |
 
 Write each first step in the pull request, with its commands, for whoever does it.
 
@@ -112,12 +114,14 @@ A green run means the release rolled out. To see that it serves:
 - **Its replicas run the commit:** in Grafana (protostrap-operate says how to open it),
   `{service_name="<component>"} | service_version="<commit>"` has lines, and none with
   errors since the rollout. (`service_version` is a filter after the braces, not a label
-  inside them.)
+  inside them.) Without the spec's `telemetry`, an Org Admin reads its CloudWatch log group
+  instead.
 - **The scheduler agrees** (Platform and Org Admins):
   `curl -s 'http://localhost:7480/api/logs?source=scheduler&q=release&since=2h&format=text'`
   shows `release finished`, and `/api/status` the commit as the release.
-- **It answers:** a request to a route it serves, from outside. Not its `ready` path: that
-  answers only for its own name on the overlay, so from outside it returns 503.
+- **It answers:** a request to a route it serves, from outside, when the spec has a tunnel.
+  Not its `ready` path: that answers only for its own name on the overlay, so from outside
+  it returns 503.
 
 ## A new component's first deploy
 
@@ -129,7 +133,8 @@ A green run means the release rolled out. To see that it serves:
   never a manual step on data-1.
 - **A worker with `min: 0` stays at zero until its queue has jobs.** That is deployed, not
   broken.
-- Routes reach it once it is ready; the edge reloads them without a restart.
+- Its `gateway.upstreams` routes reach it once it is ready; the gateway reloads them without
+  a restart.
 
 ## Deploying again
 

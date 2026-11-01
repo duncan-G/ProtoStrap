@@ -23,11 +23,13 @@ the spec's `protostrap:` version, and the sample services in `sample/services/` 
 | `AWS_REGION`                                | The region                                             |
 | `QUEUE_<NAME>_URL`                          | Each queue's URL (`<NAME>` upper case, `-` as `_`)     |
 | `BUCKET_<NAME>`, `FILES_BUCKET`             | Each bucket's name                                     |
-| `HOST_<NAME>`, `ORIGIN_<NAME>`              | Each of the spec's hosts' hostname in this account, and its origin (`https://…`) |
-| `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_PROTOCOL` | The telemetry collector, `http://telemetry:4318`, `http/protobuf` |
-| `OTEL_SERVICE_NAME`, `OTEL_RESOURCE_ATTRIBUTES` | Its component; its replica, release and environment |
+| `HOST_<NAME>`, `ORIGIN_<NAME>`              | With a gateway: each of its hosts' hostname in this account, and its origin (`https://…`) |
+| `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_PROTOCOL` | With telemetry: the collector, `http://telemetry:4318`, `http/protobuf` |
+| `OTEL_SERVICE_NAME`, `OTEL_RESOURCE_ATTRIBUTES` | With telemetry: its component; its replica, release and environment |
 
-Plus the spec's `env`, which wins for any `OTEL_` variable it sets. Treat `PROTOSTRAP_REPLICA` being set as "running under ProtoStrap".
+Plus the spec's `env`, which wins for any `OTEL_` variable it sets. Without the spec's
+`telemetry`, stdout and stderr go to CloudWatch Logs, `/protostrap/<app>/<component>`.
+Treat `PROTOSTRAP_REPLICA` being set as "running under ProtoStrap".
 Fail at startup, naming the variable, when one the code needs is missing.
 
 ## 1. Read keys from the environment's secret, at startup
@@ -61,16 +63,16 @@ must fail if it reaches the wrong service:
 
 - **HTTP (`ready: /healthz`, or `9000/healthz` on another port):** answer 200 only when the
   request's `Host`, without a port, is `PROTOSTRAP_COMPONENT`, and the replica isn't
-  draining. Otherwise 503. Any 2xx or 3xx passes, for the agent and the edge alike. Outside
-  ProtoStrap, skip the host test so local health checks pass. On the component's own port,
-  the check speaks its `protocol`, so an `http2` service gets it over h2c.
+  draining. Otherwise 503. Any 2xx or 3xx passes, for the agent and the gateway alike.
+  Outside ProtoStrap, skip the host test so local health checks pass. On the component's
+  own port, the check speaks its upstream's `protocol`, so an `http2` upstream gets it over h2c.
 - **gRPC (`ready: grpc`, or `grpc:9001`):** implement `grpc.health.v1.Health`, answering
   `SERVING` for the service names `""` and `PROTOSTRAP_COMPONENT`, `NOT_FOUND` for any
   other, and `NOT_SERVING` once draining. The port must speak cleartext HTTP/2 (h2c, prior
   knowledge). ASP.NET's `MapGrpcHealthChecksService()` maps only `""` by default: map the
   component's name too.
 - **A command (`ready: [pg_isready, -U, postgres]`),** for an image you don't write: it runs
-  in the replica and passes on exit 0, within 5 s. Not for a routed service, since the edge
+  in the replica and passes on exit 0, within 5 s. Not for an upstream of the gateway, which
   can't run it.
 - Ready means able to serve: dependencies it can't work without are reachable. A replica not
   ready within 5 minutes fails, and the release rolls back.
@@ -79,8 +81,8 @@ must fail if it reaches the wrong service:
 
 On SIGTERM:
 
-1. **Fail readiness at once**, but keep serving for `DRAIN_SECONDS` (default 10), so the edge
-   notices before connections close.
+1. **Fail readiness at once**, but keep serving for `DRAIN_SECONDS` (default 10), so the
+   gateway notices before connections close.
 2. Stop accepting, finish what's in progress, exit. All of it inside the spec's `stop`, so
    `stop` ≥ 10 s + the longest request. **`stop` defaults to 10 s**, which ends with the
    drain: set it in the spec. A second SIGTERM may exit at once.
@@ -107,7 +109,7 @@ is about to reuse, and requests fail at random. Set it to 65 s or more.
 
 - Buckets come from `FILES_BUCKET` and `BUCKET_<NAME>`, and the component's spec entry must
   list them in `uses`, or the role refuses it.
-- The tunnel takes request bodies up to 100 MB, and the edge gives a response 120 s in all,
+- The tunnel takes request bodies up to 100 MB, and the gateway gives a response 120 s in all,
   streams included, then cuts it. **Large uploads and downloads go straight to S3 with a
   presigned URL** (the bucket needs `browser: true`, or be `files`). Long work goes on a
   queue, and the client polls.
@@ -117,13 +119,13 @@ is about to reuse, and requests fail at random. Set it to 65 s or more.
 
 ## 6. Calling other services
 
-- Call by component name on the overlay, `http://api:8080`, straight, not through the edge.
+- Call by component name on the overlay, `http://api:8080`, straight, not through the gateway.
 - The caller balances: **gRPC** clients round-robin and re-resolve about every 30 s;
   **HTTP** clients cap a pooled connection's lifetime at about a minute. Docker's DNS TTL is
   minutes, so don't trust it.
 - Retry a call whose connection was refused: that replica just stopped.
 - External clients (browsers included) can't use native gRPC through the tunnel. Use
-  gRPC-Web, which the edge translates for `protocol: grpc` services (unary and server
+  gRPC-Web, which the gateway translates for `protocol: grpc` upstreams (unary and server
   streaming only, within the 120 s),
   or HTTP/JSON endpoints the service serves itself.
 
@@ -132,7 +134,7 @@ is about to reuse, and requests fail at random. Set it to 65 s or more.
 - **WebSockets.** Envoy's routes don't upgrade connections. For updates the client waits
   for, poll, or hold a request open for less than 120 s and have the client ask again.
 - **A response longer than 120 s**, server-sent events and gRPC-Web streams included: the
-  edge cuts it. A stream ends before then and the client reconnects; long work goes on a
+  gateway cuts it. A stream ends before then and the client reconnects; long work goes on a
   queue (§4).
 - **A request body over 100 MB:** straight to S3 instead (§5).
 
@@ -141,7 +143,8 @@ is about to reuse, and requests fail at random. Set it to 65 s or more.
 The protostrap-telemetry skill has the rules and each language's code. In short:
 
 - Logs leave **by one path**: JSON lines on stdout, or OTLP with the console off under
-  ProtoStrap. Both means every line twice. Skip a line per request under load.
+  ProtoStrap once it sets the OTLP endpoint (the spec has `telemetry`). Both means every line
+  twice. Skip a line per request under load.
 - OpenTelemetry's SDK, configured from the `OTEL_` variables alone: no endpoint in code.
 - Label metrics by route, never by user, ID or raw path.
 - For a `metric` signal or limit, serve Prometheus text on the spec's `metrics` port and
@@ -174,18 +177,18 @@ identity provider's realms, a broker's queues), gets it from a `task` named in i
 
 ## An authorizer
 
-A service named in another's `authorize` (protostrap-spec) answers the edge for each request
-to that service's routes:
+A service named in an upstream's `authorize` (protostrap-spec) answers the gateway for each
+request to that upstream's routes:
 
-- **Answer every method under its `path`,** fast: the edge waits its `timeout`, 2 seconds
+- **Answer every method under its `path`,** fast: the gateway waits its `timeout`, 2 seconds
   unless set, then gives the client a 503, or with `open: true` sends the request on as an
   anonymous one. Read the session from the forwarded headers (a cookie), never the body,
   which isn't sent. The path it's asked about is normalised, as the service gets it.
 - **200 lets the request through,** with the headers named in `headers` from the answer
-  added. Leave them out for an anonymous request the service may still serve; the edge
+  added. Leave them out for an anonymous request the service may still serve; the gateway
   has already removed the client's own copies, so the service can trust what arrives.
 - **A 200 can carry headers back to the client,** those named in `respond`, such as a
-  `set-cookie` when the authorizer renewed the session as it checked it. The edge adds
+  `set-cookie` when the authorizer renewed the session as it checked it. The gateway adds
   each to the service's response as a header of its own, after the service's, so send one
   `set-cookie` for each cookie; of a cookie both set, the browser keeps the authorizer's.
   The client gets no other header of a 200.
@@ -195,7 +198,7 @@ to that service's routes:
   service gets one whenever the authorizer is down or answers a 5xx, so it serves or
   refuses it as it would any anonymous request. Requests `skip` names never reach the
   authorizer.
-- **The authorized service reads the headers,** and trusts them only from the edge: a
+- **The authorized service reads the headers,** and trusts them only from the gateway: a
   call from another service on the overlay carries whatever that service sends.
 
 ## 10. Work on a schedule

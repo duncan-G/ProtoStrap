@@ -53,7 +53,7 @@ out through its zone's ingress VM (see [Network](network.md)).
 ### Ingress
 
 The ingress VM is its zone's way in and way out. It runs only the edge, cloudflared and
-Envoy, and forwards the other VMs' outbound traffic (see
+Envoy, when the spec has a gateway, and forwards the other VMs' outbound traffic (see
 [NAT on the ingress VM](network.md#nat-on-the-ingress-vm)).
 
 - **An ASG of one,** so AWS replaces it when it fails. The scheduler doesn't size this pool:
@@ -99,8 +99,8 @@ Compute VMs run workers, which drain the job queue.
 
 The data VM, `data-1`, is a plain EC2 instance that the infrastructure code creates. The
 scheduler never launches or removes it. It runs PostgreSQL and Redis and, because it is the
-one VM that is never removed, the swarm manager, the scheduler, the reporter and
-[telemetry](telemetry.md).
+one VM that is never removed, the swarm manager, the scheduler, the reporter and, if the
+spec has it, [telemetry](telemetry.md).
 
 - **A fixed private address.** Every VM joins the swarm and reaches the scheduler there, so
   it must never change. Services don't use it: they find PostgreSQL and Redis by name on the
@@ -120,9 +120,9 @@ PostgreSQL and Redis compete for one VM's CPU, memory and disk, so each gets a f
   its own.
 
 These shares are their requests in the spec, so the sizing check shows when they no longer
-fit. The telemetry replica shares the VM too, with its own memory limit and volume, but
-no cores of its own. The cost of one VM is that one failure takes them all down, along with
-the swarm manager and the scheduler.
+fit. The telemetry replica, if the spec has one, shares the VM too, with its own memory
+limit and volume, but no cores of its own. The cost of one VM is that one failure takes
+them all down, along with the swarm manager and the scheduler.
 
 #### Recovery
 
@@ -164,7 +164,7 @@ scheduler starts it there. Services still find it by name.
 
 Once both have moved to managed services, any other data VM goes, and data-1 stays on as the
 `control` VM, resized to a small type, running only the swarm manager, the scheduler, the
-reporter and telemetry. It keeps its address and its swarm volume, so nothing else notices. A general VM
+reporter and, if the spec has it, telemetry. It keeps its address and its swarm volume, so nothing else notices. A general VM
 would be a poor home for the manager: its ASG would replace a failed one with a new VM, and
 the swarm's state would go with the old one.
 

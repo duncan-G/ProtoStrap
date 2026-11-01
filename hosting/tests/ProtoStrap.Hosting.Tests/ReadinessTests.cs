@@ -30,7 +30,7 @@ public class ReadinessTests
         builder.AddEnvironment();
         builder.AddProject("api", repo.Project("services/api/Api.csproj", "Microsoft.NET.Sdk.Web"))
             .WithHttpEndpoint(targetPort: 8080, name: "http")
-            .PublishAsProtoStrapService(s => s.Request(cpu: "500m", memory: "512Mi").Protocol(GatewayProtocol.Http2).Ready(readiness));
+            .PublishAsProtoStrapService(s => s.Request(cpu: "500m", memory: "512Mi").Ready(readiness));
 
         var api = SpecText.Component(await TestApp.GenerateYamlAsync(builder), "api");
 
@@ -60,22 +60,24 @@ public class ReadinessTests
     }
 
     [Fact]
-    public async Task AServiceSaysWhatTheGatewaySpeaksToIt()
+    public async Task AnUpstreamSaysWhatTheGatewaySpeaksToIt()
     {
         using var repo = new FixtureRepo();
         var builder = TestApp.Publish(repo);
-        builder.AddEnvironment();
-        builder.AddProject("api", repo.Project("services/api/Api.csproj", "Microsoft.NET.Sdk.Web"))
-            .WithHttpEndpoint(targetPort: 8080, name: "http")
-            .PublishAsProtoStrapService(s => s.Request(cpu: "500m", memory: "512Mi").Ready("/healthz").Protocol(GatewayProtocol.Http2));
-        builder.AddProject("web", repo.Project("services/web/Web.csproj", "Microsoft.NET.Sdk.Web"))
+        var gateway = builder.AddEnvironment().AddEnvoyGateway("gateway");
+        var api = builder.AddProject("api", repo.Project("services/api/Api.csproj", "Microsoft.NET.Sdk.Web"))
             .WithHttpEndpoint(targetPort: 8080, name: "http")
             .PublishAsProtoStrapService(s => s.Request(cpu: "500m", memory: "512Mi").Ready("/healthz"));
+        var web = builder.AddProject("web", repo.Project("services/web/Web.csproj", "Microsoft.NET.Sdk.Web"))
+            .WithHttpEndpoint(targetPort: 8080, name: "http")
+            .PublishAsProtoStrapService(s => s.Request(cpu: "500m", memory: "512Mi").Ready("/healthz"));
+        gateway.WithUpstream(api, u => u.Protocol(GatewayProtocol.Http2).Routes("/api/")).WithUpstream(web, u => u.Routes("/web/"));
 
         var yaml = await TestApp.GenerateYamlAsync(builder);
 
-        Assert.Contains("\n  protocol: http2\n", SpecText.Component(yaml, "api"));
-        Assert.DoesNotContain("protocol:", SpecText.Component(yaml, "web"));
+        Assert.Contains("\n  protocol: http2\n", SpecText.Upstream(yaml, "api"));
+        Assert.DoesNotContain("protocol:", SpecText.Upstream(yaml, "web"));
+        Assert.DoesNotContain("protocol:", SpecText.Component(yaml, "api"));
     }
 
     [Fact]
@@ -101,13 +103,14 @@ public class ReadinessTests
     {
         using var repo = new FixtureRepo();
         var builder = TestApp.Publish(repo);
-        builder.AddEnvironment().WithHost("app", "protofast.dev", local: "app.dev.localhost");
-        builder.AddProject("api", repo.Project("services/api/Api.csproj", "Microsoft.NET.Sdk.Web"))
+        var gateway = builder.AddEnvironment().AddEnvoyGateway("gateway").WithHost("app", "protofast.dev", local: "app.dev.localhost");
+        var api = builder.AddProject("api", repo.Project("services/api/Api.csproj", "Microsoft.NET.Sdk.Web"))
             .WithHttpEndpoint(targetPort: 8080, name: "http")
-            .PublishAsProtoStrapService(s => s.Request(cpu: "500m", memory: "512Mi").Routes("/api/").Ready(Readiness.Command("true")));
-        builder.AddProject("web", repo.Project("services/web/Web.csproj", "Microsoft.NET.Sdk.Web"))
+            .PublishAsProtoStrapService(s => s.Request(cpu: "500m", memory: "512Mi").Ready(Readiness.Command("true")));
+        var web = builder.AddProject("web", repo.Project("services/web/Web.csproj", "Microsoft.NET.Sdk.Web"))
             .WithHttpEndpoint(targetPort: 8080, name: "http")
-            .PublishAsProtoStrapService(s => s.Request(cpu: "500m", memory: "512Mi").Routes("/web/").Ready(Readiness.Grpc.On(9001)));
+            .PublishAsProtoStrapService(s => s.Request(cpu: "500m", memory: "512Mi").Ready(Readiness.Grpc.On(9001)));
+        gateway.WithUpstream(api, u => u.Routes("/api/")).WithUpstream(web, u => u.Routes("/web/"));
         builder.AddProject("worker", repo.Project("services/worker/Worker.csproj"))
             .PublishAsProtoStrapWorker(w => w.Request(cpu: "250m", memory: "256Mi").Ready(Readiness.Http("/healthz")));
         builder.AddProject("other", repo.Project("services/other/Other.csproj"))
@@ -117,9 +120,9 @@ public class ReadinessTests
 
         Assert.Equal(
         [
-            "api: Ready: the edge checks a routed service too, and can't run a command: use Readiness.Grpc, Readiness.Tcp or an HTTP path",
+            "api: Ready: the gateway checks its upstreams too, and can't run a command: use Readiness.Grpc, Readiness.Tcp or an HTTP path",
             "other: Ready: a command can't be empty",
-            "web: Ready: the edge checks gRPC over its HTTP/2 connections to the service: set Protocol(GatewayProtocol.Http2) or Protocol(GatewayProtocol.Grpc)",
+            "web: Ready: the gateway checks gRPC over its HTTP/2 connections to the service: set Protocol(GatewayProtocol.Http2) or Protocol(GatewayProtocol.Grpc) on its upstream",
             "worker: Ready: a worker has no port, so its check names one, such as Readiness.Http(\"/healthz\").On(8081)",
         ], problems.Order(StringComparer.Ordinal));
     }

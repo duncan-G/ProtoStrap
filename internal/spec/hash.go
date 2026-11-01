@@ -76,13 +76,18 @@ func (c *Component) Fingerprint(image, config string) string {
 // InfraProjection is the part of the spec Terraform reads. The infra workflow only needs to
 // run when it changes (docs/protostrap-aspire.md, "Infrastructure projection").
 type InfraProjection struct {
+	// Tunnel and Gateway say whether Terraform makes the tunnel, and the gateway's
+	// repository, role and hosts.
+	Tunnel     bool                      `json:"tunnel"`
+	Gateway    bool                      `json:"gateway"`
 	Hosts      map[string]string         `json:"hosts"`
 	Pools      map[string]poolProjection `json:"pools"`
 	Queues     map[string]Queue          `json:"queues"`
 	Buckets    map[string]Bucket         `json:"buckets,omitempty"`
 	Email      *emailProjection          `json:"email,omitempty"`
 	Components map[string]compProjection `json:"components"`
-	Telemetry  telemetryProjection       `json:"telemetry"`
+	// Telemetry is nil without telemetry, when Terraform makes none of it.
+	Telemetry *telemetryProjection `json:"telemetry,omitempty"`
 }
 
 // telemetryProjection is what Terraform makes for telemetry: its volume, and its bucket's
@@ -112,7 +117,9 @@ type compProjection struct {
 // Projection returns the infra projection.
 func (s *Spec) Projection() InfraProjection {
 	p := InfraProjection{
-		Hosts:      map[string]string(s.Hosts),
+		Tunnel:     s.Tunnel != nil,
+		Gateway:    s.Gateway != nil,
+		Hosts:      map[string]string(s.Hosts()),
 		Pools:      map[string]poolProjection{},
 		Queues:     map[string]Queue{},
 		Components: map[string]compProjection{},
@@ -138,8 +145,9 @@ func (s *Spec) Projection() InfraProjection {
 		cp.Queues = slices.Sorted(slices.Values(c.QueueSignals()))
 		p.Components[c.Name] = cp
 	}
-	t := s.Telemetry
-	p.Telemetry = telemetryProjection{Volume: t.Volume, Logs: t.Retention.Logs, Traces: t.Retention.Traces}
+	if t := s.Telemetry; t != nil {
+		p.Telemetry = &telemetryProjection{Volume: t.Volume, Logs: t.Retention.Logs, Traces: t.Retention.Traces}
+	}
 	p.Email = s.Email.projection()
 	return p
 }

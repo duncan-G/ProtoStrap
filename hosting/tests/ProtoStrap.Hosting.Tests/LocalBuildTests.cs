@@ -10,20 +10,20 @@ namespace ProtoStrap.Hosting.Tests;
 /// Under `aspire run`, with ProtoStrap.Hosting built from a checkout, protostrap-build builds the
 /// protostrap the edge renders with: as the AppHost starts, whenever the edge starts, and on its
 /// Rebuild command. Go's build cache makes a build a no-op when nothing changed. It says when the
-/// checkout has moved on since (docs/protostrap-aspire.md, "The local edge").
+/// checkout has moved on since (docs/protostrap-aspire.md, "The local gateway").
 /// </summary>
 public class LocalBuildTests
 {
     [Fact]
-    public void RunModeAddsTheBuildUnderTheEdge()
+    public void RunModeAddsTheBuildUnderTheGateway()
     {
         using var repo = new FixtureRepo();
         var builder = TestApp.Run(repo);
-        builder.AddEnvironment().WithHost("app", "protofast.dev", local: "app.dev.localhost");
+        builder.AddEnvironment().AddEnvoyGateway("gateway").WithHost("app", "protofast.dev", local: "app.dev.localhost");
 
         var build = Assert.Single(builder.Resources, r => r.Name == "protostrap-build");
         var parent = Assert.Single(build.Annotations.OfType<ResourceRelationshipAnnotation>());
-        Assert.Equal(("protostrap-edge", "Parent"), (parent.Resource.Name, parent.Type));
+        Assert.Equal(("gateway", "Parent"), (parent.Resource.Name, parent.Type));
         Assert.True(build.IsExcludedFromPublish());
         var rebuild = Assert.Single(build.Annotations.OfType<ResourceCommandAnnotation>(), c => c.Name == "rebuild-protostrap");
         Assert.Equal("Rebuild", rebuild.DisplayName);
@@ -34,7 +34,7 @@ public class LocalBuildTests
     {
         using var repo = new FixtureRepo();
         var builder = TestApp.Publish(repo);
-        builder.AddEnvironment().WithHost("app", "protofast.dev", local: "app.dev.localhost");
+        builder.AddEnvironment().AddEnvoyGateway("gateway").WithHost("app", "protofast.dev", local: "app.dev.localhost");
 
         Assert.DoesNotContain(builder.Resources, r => r.Name == "protostrap-build");
     }
@@ -110,7 +110,7 @@ public class LocalBuildTests
     }
 
     [Fact]
-    public async Task RebuildBuildsAndThenRestartsTheEdge()
+    public async Task RebuildBuildsAndThenRestartsTheGateway()
     {
         using var repo = new FixtureRepo();
         var (fake, build, _) = Build(repo, new FakeGo(repo, onPath: true));
@@ -129,7 +129,7 @@ public class LocalBuildTests
     }
 
     [Fact]
-    public async Task AFailedRebuildLeavesTheEdgeAsItIs()
+    public async Task AFailedRebuildLeavesTheGatewayAsItIs()
     {
         using var repo = new FixtureRepo();
         var (_, build, _) = Build(repo, new FakeGo(repo, onPath: true, fails: "internal/edge/config.go:3:1: syntax error"));
@@ -162,7 +162,7 @@ public class LocalBuildTests
     }
 
     [Fact]
-    public async Task WithoutGoItSaysSoAndTheEdgeUsesProtoStrapOnThePath()
+    public async Task WithoutGoItSaysSoAndTheGatewayUsesProtoStrapOnThePath()
     {
         using var repo = new FixtureRepo();
         var installed = repo.WriteExecutable("path/protostrap", "#!/bin/sh\n");
@@ -172,22 +172,23 @@ public class LocalBuildTests
 
         Assert.Equal(installed, path);
         Assert.Equal("Go not found", build.State);
-        Assert.Contains(logger.Entries, e => e.Message.Contains($"the edge renders with {installed}"));
+        Assert.Contains(logger.Entries, e => e.Message.Contains($"the gateway renders with {installed}"));
     }
 
     /// <summary>
-    /// Build adds an environment with a host, so the edge and its build, and has the build see
+    /// Build adds an environment with a gateway, so the gateway and its build, and has the build see
     /// only the fixture, with every checkout file older than any build.
     /// </summary>
     private static (FakeGo Fake, LocalBuild Build, ListLogger Logger) Build(FixtureRepo repo, FakeGo fake, string? check = null, string? path = null)
     {
         var builder = TestApp.Run(repo);
-        var protostrap = builder.AddEnvironment().WithHost("app", "protofast.dev", local: "app.dev.localhost");
+        var protostrap = builder.AddEnvironment();
+        var gateway = protostrap.AddEnvoyGateway("gateway").WithHost("app", "protofast.dev", local: "app.dev.localhost");
         if (check is not null)
             protostrap.WithCheck(check);
         protostrap.Resource.Binary = fake.Binary(path: path);
         fake.Touch(DateTime.UtcNow.AddHours(-1));
-        var build = protostrap.Resource.LocalBuild!;
+        var build = gateway.Resource.LocalBuild!;
         var logger = new ListLogger();
         build.Logger = logger;
         return (fake, build, logger);

@@ -251,7 +251,7 @@ run "volume_lists_on_two_data_vms" {
     values = { id = "vol-0c" }
   }
   override_resource {
-    target = aws_ebs_volume.telemetry
+    target = aws_ebs_volume.telemetry[0]
     values = { id = "vol-0t" }
   }
   override_resource {
@@ -346,12 +346,16 @@ run "no_compute_pool" {
     spec  = <<-EOT
       app: tiny
       protostrap: 0.1.0
-      hosts:
-        tiny: tiny.example.com
       pools:
         ingress: { vm: c8g.medium }
         general: { vm: [m7g.large], max: 2 }
         data: { vm: m7g.large }
+      gateway:
+        hosts:
+          tiny: tiny.example.com
+        upstreams:
+          web:
+            routes: [/]
       components:
         web:
           kind: service
@@ -360,7 +364,6 @@ run "no_compute_pool" {
           request: { cpu: 100m, memory: 128Mi }
           port: 80
           ready: /healthz
-          routes: [/]
     EOT
     hosts = null
   }
@@ -391,12 +394,16 @@ run "buckets" {
     spec         = <<-EOT
       app: tiny
       protostrap: 0.1.0
-      hosts:
-        tiny: tiny.example.com
       pools:
         ingress: { vm: c8g.medium }
         general: { vm: [m7g.large], max: 2 }
         data: { vm: m7g.large }
+      gateway:
+        hosts:
+          tiny: tiny.example.com
+        upstreams:
+          web:
+            routes: [/]
       queues:
         jobs: {}
       buckets:
@@ -411,7 +418,6 @@ run "buckets" {
           request: { cpu: 100m, memory: 128Mi }
           port: 80
           ready: /healthz
-          routes: [/]
           uses: [documents, files, jobs]
         worker:
           kind: worker
@@ -565,19 +571,19 @@ run "telemetry" {
   command = apply
 
   variables {
-    spec = replace(file("../../sample/protostrap.yaml"), "edge:\n", "telemetry:\n  volume: 30Gi\n  retention: { logs: 14d, traces: 3d }\n\nedge:\n")
+    spec = replace(file("../../sample/protostrap.yaml"), "telemetry: {}\n", "telemetry:\n  volume: 30Gi\n  retention: { logs: 14d, traces: 3d }\n")
   }
 
   assert {
-    condition = (aws_ebs_volume.telemetry.size == 30 &&
-      aws_ebs_volume.telemetry.tags["protostrap:mount"] == "/data/telemetry" &&
-      aws_ebs_volume.telemetry.tags["protostrap:snapshot"] == "daily" &&
-    aws_volume_attachment.telemetry.instance_id == aws_instance.data["data-1"].id)
+    condition = (aws_ebs_volume.telemetry[0].size == 30 &&
+      aws_ebs_volume.telemetry[0].tags["protostrap:mount"] == "/data/telemetry" &&
+      aws_ebs_volume.telemetry[0].tags["protostrap:snapshot"] == "daily" &&
+    aws_volume_attachment.telemetry[0].instance_id == aws_instance.data["data-1"].id)
     error_message = "Telemetry's volume is on data-1, sized from the spec, mounted at /data/telemetry and snapshotted like the others."
   }
 
   assert {
-    condition     = !contains(values(aws_volume_attachment.stateful)[*].device_name, aws_volume_attachment.telemetry.device_name) && aws_volume_attachment.telemetry.device_name != aws_volume_attachment.control.device_name
+    condition     = !contains(values(aws_volume_attachment.stateful)[*].device_name, aws_volume_attachment.telemetry[0].device_name) && aws_volume_attachment.telemetry[0].device_name != aws_volume_attachment.control.device_name
     error_message = "Telemetry's volume has a device of its own on data-1."
   }
 
@@ -600,10 +606,10 @@ run "telemetry" {
   }
 
   assert {
-    condition = (aws_ssm_document.telemetry.name == "protostrap-telemetry" &&
-      jsondecode(aws_ssm_document.telemetry.content).properties.portNumber == "7482" &&
-      jsondecode(aws_ssm_document.telemetry.content).properties.type == "LocalPortForwarding" &&
-    keys(jsondecode(aws_ssm_document.telemetry.content).parameters) == ["localPortNumber"])
+    condition = (aws_ssm_document.telemetry[0].name == "protostrap-telemetry" &&
+      jsondecode(aws_ssm_document.telemetry[0].content).properties.portNumber == "7482" &&
+      jsondecode(aws_ssm_document.telemetry[0].content).properties.type == "LocalPortForwarding" &&
+    keys(jsondecode(aws_ssm_document.telemetry[0].content).parameters) == ["localPortNumber"])
     error_message = "Grafana's session document forwards port 7482 and nothing else, apart from the operator UI's."
   }
 
@@ -624,8 +630,87 @@ run "telemetry_defaults" {
   command = apply
 
   assert {
-    condition = (aws_ebs_volume.telemetry.size == 20 &&
+    condition = (aws_ebs_volume.telemetry[0].size == 20 &&
     [for r in aws_s3_bucket_lifecycle_configuration.telemetry.rule : r.expiration[0].days if r.id == "expire"] == [37])
-    error_message = "Without a telemetry section: a 20Gi volume, and 30 days of logs and traces, plus a week."
+    error_message = "With telemetry: {}: a 20Gi volume, and 30 days of logs and traces, plus a week."
+  }
+}
+
+# Without telemetry, the volume, its port and Grafana's session document go: replicas' output
+# goes to their log groups. The bucket stays, and its lifecycle rule expires what is in it.
+run "no_telemetry" {
+  command = apply
+
+  variables {
+    spec = replace(file("../../sample/protostrap.yaml"), "telemetry: {}\n", "")
+  }
+
+  assert {
+    condition     = length(aws_ebs_volume.telemetry) == 0 && length(aws_volume_attachment.telemetry) == 0 && length(aws_ssm_document.telemetry) == 0
+    error_message = "No telemetry volume or session document without telemetry."
+  }
+
+  assert {
+    condition     = !contains(keys(aws_vpc_security_group_ingress_rule.node), "telemetry")
+    error_message = "No VM sends to port 24224 without telemetry."
+  }
+
+  assert {
+    condition     = !strcontains(aws_s3_object.volumes["data-1"].content, "/data/telemetry")
+    error_message = "data-1 mounts no telemetry volume: ${aws_s3_object.volumes["data-1"].content}"
+  }
+
+  assert {
+    condition     = aws_s3_bucket.telemetry.bucket == "protostrap-123456789012-us-east-1-telemetry" && contains(keys(aws_cloudwatch_log_group.component), "api")
+    error_message = "The telemetry bucket stays, and every component keeps its log group, where its output goes."
+  }
+}
+
+# Without a tunnel, Cloudflare has no tunnel, hostnames or rate limit, and the ingress VMs
+# reach no tunnel port. The gateway's hosts still give replicas their HOST_ variables.
+run "no_tunnel" {
+  command = apply
+
+  variables {
+    spec = replace(file("../../sample/protostrap.yaml"), "tunnel: {}\n", "")
+  }
+
+  assert {
+    condition = (length(cloudflare_zero_trust_tunnel_cloudflared.edge) == 0 && length(cloudflare_zero_trust_tunnel_cloudflared_config.edge) == 0 &&
+    length(cloudflare_dns_record.host) == 0 && length(cloudflare_ruleset.rate_limit) == 0 && length(aws_vpc_security_group_egress_rule.ingress_tunnel) == 0)
+    error_message = "No tunnel, hostnames, rate limit or tunnel port without a tunnel."
+  }
+
+  assert {
+    condition     = jsondecode(aws_s3_object.hosts.content) == { sample = "sample.example.com" } && output.tunnel_id == null
+    error_message = "hosts.json still names the gateway's hosts; there's no tunnel to name."
+  }
+}
+
+# Operator UIs reach their apps through the tunnel, so they need one.
+run "operator_hosts_need_the_tunnel" {
+  command = plan
+
+  variables {
+    spec           = replace(file("../../sample/protostrap.yaml"), "tunnel: {}\n", "")
+    operator_hosts = { "ops.example.com" = ["ops@example.com"] }
+  }
+
+  expect_failures = [aws_s3_object.hosts]
+}
+
+# Without a gateway, there are no hosts: hosts.json is empty, and the account's config gives
+# none.
+run "no_gateway" {
+  command = apply
+
+  variables {
+    spec  = replace(replace(replace(file("../../sample/protostrap.yaml"), "tunnel: {}\n", ""), "/(?s)gateway:\\n.*?\\n\\n/", ""), "{ requests: 20/s }, ", "")
+    hosts = null
+  }
+
+  assert {
+    condition     = jsondecode(aws_s3_object.hosts.content) == {} && length(cloudflare_dns_record.host) == 0 && length(local.hosts) == 0
+    error_message = "No hosts without a gateway."
   }
 }

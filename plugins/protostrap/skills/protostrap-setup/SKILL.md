@@ -62,7 +62,11 @@ grep -rnF --exclude-dir={.git,.protostrap,.terraform,bin,obj,node_modules} '0.1.
 
 1. **Write the spec** (protostrap-spec skill) or the AppHost (protostrap-aspire skill). `app`
    is short and lowercase: it names the secret, `<app>/<environment>`, and the log groups.
-   Leave `hosts` out when they differ per account, and route by path.
+   Add `tunnel: {}`, `gateway` and `telemetry: {}` (with Aspire, `AddCloudflareTunnel`,
+   `AddEnvoyGateway` and `AddTelemetry`) for what the application uses: each runs only when
+   present, and an application served from the internet needs the first two.
+   Name each host in `gateway.hosts`, and route by those names: each account's platform root
+   gives every name its hostname there with `hosts`.
 2. **Make the code keep the contract** (protostrap-contract skill).
 3. **Add the Terraform roots** for prod, from the templates: a bootstrap root (`app`,
    `environment`, `github_repository`, the platform's `infra_variables`), a platform root
@@ -104,8 +108,8 @@ grep -rnF --exclude-dir={.git,.protostrap,.terraform,bin,obj,node_modules} '0.1.
       `main`.
    5. `gh workflow run infra.yml -f action=plan`, then `-f action=apply`. Then confirm the
       alert emails.
-   6. Secrets: the tunnel's token with ProtoStrap's script, with `CLOUDFLARE_ACCOUNT_ID`,
-      `CLOUDFLARE_API_TOKEN`, `AWS_PROFILE` and `AWS_REGION` set:
+   6. Secrets: with a tunnel in the spec, its token with ProtoStrap's script, with
+      `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN`, `AWS_PROFILE` and `AWS_REGION` set:
       `../ProtoStrap/scripts/set-edge-token.sh <app> prod` (or `.protostrap/scripts/…`). Then
       every key in `<app>/prod` (protostrap-secrets skill), PostgreSQL's and Redis's
       passwords included.

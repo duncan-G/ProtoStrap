@@ -9,8 +9,8 @@ hold the exact configuration.
 Four rules hold throughout:
 
 - **Nothing accepts connections from the internet.** Requests arrive only through a tunnel
-  that cloudflared dials out. Only the ingress VMs have public IPs, and they accept nothing
-  from outside.
+  that cloudflared dials out, when the spec has one. Only the ingress VMs have public IPs,
+  and they accept nothing from outside.
 - **Services talk on the overlay, VMs on the VPC.** No service can reach a port on a VM.
 - **One way out.** The other VMs have no public IPs. They reach the internet through the
   ingress VM's NAT, and S3 through the free gateway endpoint.
@@ -65,6 +65,7 @@ Every flow, and the path it takes:
 | Control             | Agents → the scheduler                                    | The VPC, to data-1's fixed address, over TLS             |
 | Telemetry           | Services → the collector on data-1                        | The overlay, to `telemetry`                              |
 | Replicas' output    | Docker on every VM → the collector on data-1              | The VPC, to data-1's fixed address, port 24224           |
+| Replicas' output, without telemetry | Docker on every VM → CloudWatch Logs      | The ingress VM's NAT                                     |
 | AWS credentials     | Services → the agent on their VM                          | Inside the VM                                            |
 | Swarm               | Every VM ↔ the swarm manager and each other               | The VPC                                                  |
 | Shell access        | Operators → VMs                                           | SSM Session Manager, which each VM dials out to          |
@@ -157,6 +158,13 @@ it. Three things do, so a mistake in one doesn't open a port:
 
 ## Requests in
 
+Requests come in through the [tunnel](protostrap.md#tunnel) and the
+[gateway](protostrap.md#gateway), each of which runs only when the spec has it. The tunnel
+needs the gateway. Without a tunnel, nothing reaches the gateway from the internet:
+Terraform makes no tunnel, DNS records or rate limit, and the ingress VMs don't open the
+tunnel's port out. Without a gateway, no edge runs, and the ingress VMs only forward their
+zone's outbound traffic.
+
 ### Cloudflare
 
 The application's domain is on Cloudflare, managed by the infra workflow. Cloudflare:
@@ -174,8 +182,9 @@ The application's domain is on Cloudflare, managed by the infra workflow. Cloudf
 
 ### The tunnel
 
-- **There is one tunnel,** created by the infra workflow. Its routes live in Cloudflare, not
-  on a VM: every host in the spec goes to Envoy, and any other host gets a 404.
+- **There is one tunnel,** created by the infra workflow when the spec has `tunnel`. Its
+  routes live in Cloudflare, not on a VM: every host in the gateway's `hosts` goes to Envoy,
+  and any other host gets a 404.
 - **cloudflared connects to two Cloudflare data centres,** from its ingress VM's own IP, so
   losing one doesn't drop the tunnel. It uses QUIC, and falls back to TCP where UDP is
   blocked.
@@ -191,7 +200,8 @@ allow-list of operators' emails before Cloudflare sends any request for that hos
 tunnel.
 
 - **Access can't be bypassed.** The tunnel is the only way in, and Cloudflare applies
-  Access before it.
+  Access before it. So operator UIs need the tunnel: Terraform refuses `operator_hosts` for
+  a spec without one.
 - **No allow-list, no hostname.** A UI without an Access policy isn't published at all.
 - **Hosts with their own sign-in don't use Access,** such as an application's admin pages,
   which check the user's roles themselves.
@@ -203,11 +213,11 @@ tunnel.
 
 ### cloudflared and Envoy
 
-cloudflared and Envoy run in one container, [the edge](protostrap.md#edge), alone on its
+cloudflared and Envoy run in one container, [the edge](protostrap.md#gateway), alone on its
 zone's ingress VM. They start and stop as one, and requests pass from one to the other
-without leaving the container. Envoy accepts requests only from cloudflared, so it can trust
-the client address Cloudflare passes along. The agent attaches the edge to the overlay so
-Envoy can reach services.
+without leaving the container. Without a tunnel, the edge runs Envoy alone. Envoy accepts
+requests only from cloudflared, so it can trust the client address Cloudflare passes
+along. The agent attaches the edge to the overlay so Envoy can reach services.
 
 ### What the request path can't carry
 
@@ -279,12 +289,12 @@ that needs more encrypts its own connections, as PostgreSQL and Redis can with T
 ### Security groups
 
 Every VM, ingress VMs included, has the `node` group. Inbound, it admits only the other VMs,
-for Swarm, the overlay, the scheduler, and replicas' output to telemetry (TCP 24224).
-Outbound, it allows the same, plus HTTPS to anywhere.
+for Swarm, the overlay, the scheduler, and, with telemetry, replicas' output to it (TCP
+24224). Outbound, it allows the same, plus HTTPS to anywhere.
 
 Ingress VMs also have the `ingress` group. It admits HTTPS from the other VMs, for the NAT
-to forward, and lets the tunnel and HTTPS out to anywhere. Only ingress VMs can reach
-Cloudflare's tunnel port.
+to forward, and lets HTTPS out to anywhere, and the tunnel too when the spec has one. Only
+ingress VMs can reach Cloudflare's tunnel port.
 
 - **No application port needs a rule.** Service traffic, PostgreSQL and Redis included,
   travels inside the overlay, and so does OTLP to the collector.
@@ -300,6 +310,8 @@ Cloudflare's tunnel port.
 - **Docker sends replicas' output** to the telemetry collector at the same address, port
   24224, which the telemetry replica publishes on data-1's address alone. Containers can't
   reach it: it is a VM's address (see [Containers and their VM](#containers-and-their-vm)).
+  Without telemetry, Docker sends it to CloudWatch Logs instead
+  ([Without telemetry](telemetry.md#without-telemetry)).
 
 
 ## Containers and their VM

@@ -19,10 +19,13 @@ The spec's fields as `internal/spec` reads them. A key not listed here is an err
 ```yaml
 app: shop                      # up to 30 characters; names the secret, shop/<environment>, and the log groups
 protostrap: 0.1.1              # the ProtoStrap version; must match the workflows' @v and the roots' ?ref=
-hosts:                         # optional; each host's name, which routes use (shop/api/), and hostname
-  shop: shop.example.com       # an account's Terraform root may give every name another hostname
 pools: { ... }
-edge: { request: { cpu: 500m, memory: 256Mi } }
+tunnel: {}                     # optional; cloudflared, from Cloudflare to the gateway. Needs the gateway; no settings
+gateway:                       # optional; Envoy on each ingress VM. Without it: no edge, no hosts, no HOST_/ORIGIN_
+  request: { cpu: 500m, memory: 256Mi }   # the default; covers cloudflared too; must fit the ingress VM
+  hosts:                       # each host's name, which routes use (shop/api/), and hostname
+    shop: shop.example.com     # an account's Terraform root may give every name another hostname
+  upstreams: { ... }           # the services it sends requests to (below)
 telemetry:                     # optional; ProtoStrap's logs, traces and metrics on data-1 (docs/telemetry.md)
   request: { cpu: 500m, memory: 1536Mi }   # must fit data-1 beside its stateful components; at least 1Gi
   volume: 20Gi                 # Prometheus's metrics; at least 5Gi, only grows
@@ -32,11 +35,15 @@ buckets: { ... }
 components: { ... }
 ```
 
+Each of `tunnel`, `gateway` and `telemetry` runs only when present; `{}` runs it with its
+defaults, and a section left empty (`tunnel:`) is an error. Without telemetry, replicas'
+output goes to CloudWatch Logs and no `OTEL_` variable is set.
+
 ## Pools
 
 ```yaml
 pools:
-  ingress: { vm: c8g.medium }              # one VM per zone, the edge and NAT only. Also: reserved
+  ingress: { vm: c8g.medium }              # one VM per zone, the edge (if a gateway) and NAT only. Also: reserved
   general:
     vm: [m7g.large, m6g.large, m8g.large, m7gd.large]   # one shape; sizing assumes the first
     min: 1
@@ -58,6 +65,27 @@ VM types are Graviton (arm64): any of them, from the burstable `t4g` up; x86 typ
 `m7i` or `t3` are refused. Only Graviton3 and later (`c7g`, `m7g`, `r7g`, the `8g` families)
 encrypt traffic between VMs in hardware. A request must fit one VM of its pool after
 `reserved`.
+
+## Gateway upstreams
+
+```yaml
+gateway:
+  upstreams:
+    api:
+      protocol: grpc
+      routes: [shop/api/, { route: /py/, rate: 200/s }]
+      authorize: { by: auth, path: /auth/check, headers: [x-user], forward: [cookie] }
+```
+
+Each key is a service component; one route goes to one upstream.
+
+| Field       | Meaning                                                                          |
+| ----------- | -------------------------------------------------------------------------------- |
+| `protocol`  | What the gateway speaks to it: `http1`, `http2` or `grpc`. Default `grpc` with `ready: grpc`, otherwise `http1`. A gRPC `ready` needs `http2` or `grpc` |
+| `routes`    | Required, at least one. A host's name and a path prefix (`shop/api/`), or a path for every host (`/api/`), or `{ route, rate }` |
+| `authorize` | `{ by, path, headers, forward, respond, open, timeout, skip }`: a service the gateway asks about each request to these routes first, which needn't be an upstream. `open: true` sends on what it can't answer for; `timeout` default 2 s, at most 5 s; `skip` lists prefixes under the routes (`/assets/`) and quoted extensions (`"*.js"`, up to 30) it isn't asked about |
+
+An upstream's `ready` can't be a command: the gateway checks it too.
 
 ## Queues
 
@@ -84,7 +112,7 @@ buckets:
 
 | Field      | Meaning                                                                          |
 | ---------- | -------------------------------------------------------------------------------- |
-| `browser`  | Browsers on the hosts and the account's `cors_origins` may use signed URLs       |
+| `browser`  | Browsers on the gateway's hosts and the account's `cors_origins` may use signed URLs. Needs `gateway.hosts` |
 | `versions` | Versioning on; earlier versions kept this long. Components can't delete them     |
 | `lock`     | Object lock, for GOVERNANCE retention. Needs `versions`. Can't be turned off     |
 | `expire`   | Objects are deleted this long after they're written                              |
@@ -118,8 +146,6 @@ or bucket may be called `email`. How to send is the protostrap-email skill.
 | `request`          | all                       | `{ cpu, memory }` one replica reserves                              |
 | `port`             | service, stateful         | The port it listens on                                              |
 | `ready`            | service                   | `grpc`, or an HTTP path such as `/healthz`                          |
-| `routes`           | service                   | A host's name and a path prefix (`shop/api/`), or a path for every host (`/api/`), or `{ route, rate }` |
-| `authorize`        | service                   | `{ by, path, headers, forward, respond, open, timeout, skip }`: a service the edge asks about each request to this one's routes first. `open: true` sends on what it can't answer for; `timeout` default 2 s, at most 5 s; `skip` lists prefixes under the routes (`/assets/`) and quoted extensions (`"*.js"`, up to 30) it isn't asked about |
 | `metrics`          | all                       | `<port>/<path>` of a Prometheus endpoint, such as `9090/metrics`    |
 | `depends_on`       | all                       | Components with a ready replica before this one starts              |
 | `uses`             | all                       | Queues, buckets, `files`, `backups`, `email`. Builds its IAM role   |
@@ -149,7 +175,7 @@ desired replicas = clamp(min(demand, lowest limit), min, max)
 | Signal                                 | Measured by                      | Demand                                   |
 | -------------------------------------- | -------------------------------- | ---------------------------------------- |
 | `{ cpu: 70% }`                         | Agents, from Docker              | ceil(ready replicas × average CPU ÷ 70%), CPU as a share of the request |
-| `{ requests: 50/s }`                   | The edge's Envoy; needs `routes` | ceil(requests per second ÷ 50)           |
+| `{ requests: 50/s }`                   | The gateway; only for an upstream | ceil(requests per second ÷ 50)          |
 | `{ queue: orders, rate: 2/s, drain: 60s }` | The scheduler, from SQS      | ceil((waiting + in flight) ÷ (2 × 60))   |
 | `{ metric: <name>, target: n }`        | Replicas' `metrics` endpoints    | ceil(ready replicas × average ÷ n)       |
 

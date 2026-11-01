@@ -30,9 +30,7 @@ internal sealed class ComponentSettings(ComponentKind kind)
     public Pool? Pool { get; set; }
     public string? Vm { get; set; }
     public ResourceSettings? Request { get; set; }
-    public List<RouteSettings> Routes { get; } = [];
     public Readiness? Ready { get; set; }
-    public GatewayProtocol? Protocol { get; set; }
     public MetricsSettings? Metrics { get; set; }
     public TimeSpan? Stop { get; set; }
     public ScaleSettings? Scale { get; set; }
@@ -42,8 +40,16 @@ internal sealed class ComponentSettings(ComponentKind kind)
     public bool SecretFiles { get; set; }
     public SecretChange? OnSecretChange { get; set; }
     public string? SecretPrefix { get; set; }
-    public AuthorizeSettings? Authorize { get; set; }
     public ConfigChange? OnConfigChange { get; set; }
+}
+
+/// <summary>UpstreamSettings are what WithUpstream gave the gateway for a resource.</summary>
+internal sealed class UpstreamSettings(IResource resource)
+{
+    public IResource Resource { get; } = resource;
+    public List<RouteSettings> Routes { get; } = [];
+    public GatewayProtocol? Protocol { get; set; }
+    public AuthorizeSettings? Authorize { get; set; }
 }
 
 internal sealed record RouteSettings(string Route, double? Rate);

@@ -51,8 +51,8 @@ public sealed class Readiness
     public static Readiness Http(string path) => new("http", null, path, null);
 
     /// <summary>
-    /// Command runs in the replica, and passes when it exits 0, such as pg_isready. The edge
-    /// can't run it, so a service with routes can't use one.
+    /// Command runs in the replica, and passes when it exits 0, such as pg_isready. The gateway
+    /// can't run it, so one of its upstreams can't use one.
     /// </summary>
     public static Readiness Command(params string[] command) => new("command", null, null, [.. command]);
 
@@ -124,7 +124,65 @@ public sealed class ConfigChange
     public static ConfigChange Run(params string[] command) => new(null, [.. command]);
 }
 
-/// <summary>ProtoStrapService configures a service, which gets requests from the gateway on its routes.</summary>
+/// <summary>
+/// ProtoStrapUpstream configures how the gateway reaches one of its upstreams: the routes it
+/// sends to it, what it speaks to it, and who it asks about each request first.
+/// </summary>
+public sealed class ProtoStrapUpstream
+{
+    internal ProtoStrapUpstream(UpstreamSettings settings) => Settings = settings;
+
+    internal UpstreamSettings Settings { get; }
+
+    /// <summary>
+    /// Routes adds host and path prefixes the gateway sends to the service, such as "app/api/",
+    /// the gateway's app host and /api/. A path alone, such as "/api/", matches every host.
+    /// </summary>
+    public ProtoStrapUpstream Routes(params string[] routes)
+    {
+        Settings.Routes.AddRange(routes.Select(r => new RouteSettings(r, null)));
+        return this;
+    }
+
+    /// <summary>Route adds a route with a rate limit, in requests per second across every replica.</summary>
+    public ProtoStrapUpstream Route(string route, double rate) { Settings.Routes.Add(new(route, rate)); return this; }
+
+    /// <summary>
+    /// Protocol sets what the gateway speaks to the service, which defaults to Grpc when the
+    /// service is Ready(Readiness.Grpc), otherwise Http1.
+    /// </summary>
+    public ProtoStrapUpstream Protocol(GatewayProtocol protocol) { Settings.Protocol = protocol; return this; }
+
+    /// <summary>
+    /// Authorize has the gateway ask another service about each request to these routes before
+    /// sending it on (docs/protostrap.md, "Authorizing requests"). The gateway sends the
+    /// request's method, path and headers, without its body, to the authorizer at path followed
+    /// by the request's own path. A 200 lets the request through with the authorizer's headers
+    /// added, after removing the client's own copies of them, and its respond headers added to
+    /// the service's response; anything else is the response. The authorizer needn't be an
+    /// upstream itself.
+    /// </summary>
+    /// <param name="by">It is the service that answers.</param>
+    /// <param name="path">It is the prefix of the path the gateway asks for, such as /auth/check; by default none.</param>
+    /// <param name="headers">They are the authorizer's response headers added to the request, such as x-user.</param>
+    /// <param name="forward">They are the request's headers sent to the authorizer besides Authorization, such as cookie.</param>
+    /// <param name="respond">They are the authorizer's response headers added to the service's response, such as set-cookie.</param>
+    /// <param name="open">It sends a request the authorizer can't answer for on, without its headers, rather than answering 503.</param>
+    /// <param name="timeout">It is how long the gateway waits for the authorizer, up to 5 seconds; by default 2.</param>
+    /// <param name="skip">They are the requests sent on without asking: path prefixes under the routes, such as /assets/, and file extensions, such as *.js.</param>
+    public ProtoStrapUpstream Authorize<T>(IResourceBuilder<T> by, string? path = null, string[]? headers = null, string[]? forward = null,
+        string[]? respond = null, bool open = false, TimeSpan? timeout = null, string[]? skip = null)
+        where T : IResource
+    {
+        Settings.Authorize = new(by.Resource, path, headers ?? [], forward ?? [], respond ?? [], open, timeout, skip ?? []);
+        return this;
+    }
+}
+
+/// <summary>
+/// ProtoStrapService configures a service, which takes requests: from the gateway, when it is
+/// one of the gateway's upstreams, and from other components on the overlay.
+/// </summary>
 public sealed class ProtoStrapService
 {
     internal ComponentSettings Settings { get; } = new(ComponentKind.Service);
@@ -136,43 +194,6 @@ public sealed class ProtoStrapService
     public ProtoStrapService Request(string cpu, string memory) { Settings.Request = new(cpu, memory); return this; }
 
     /// <summary>
-    /// Routes adds host and path prefixes the gateway sends to the service, such as
-    /// "protofast.dev/api/". A path alone, such as "/api/", matches every host.
-    /// </summary>
-    public ProtoStrapService Routes(params string[] routes)
-    {
-        Settings.Routes.AddRange(routes.Select(r => new RouteSettings(r, null)));
-        return this;
-    }
-
-    /// <summary>Route adds a route with a rate limit, in requests per second across every replica.</summary>
-    public ProtoStrapService Route(string route, double rate) { Settings.Routes.Add(new(route, rate)); return this; }
-
-    /// <summary>
-    /// Authorize has the edge ask another service about each request to this one's routes
-    /// before sending it on (docs/protostrap.md, "Authorizing requests"). The edge sends the
-    /// request's method, path and headers, without its body, to the authorizer at path followed
-    /// by the request's own path. A 200 lets the request through with the authorizer's headers
-    /// added, after removing the client's own copies of them, and its respond headers added to
-    /// the service's response; anything else is the response.
-    /// </summary>
-    /// <param name="by">It is the service that answers.</param>
-    /// <param name="path">It is the prefix of the path the edge asks for, such as /auth/check; by default none.</param>
-    /// <param name="headers">They are the authorizer's response headers added to the request, such as x-user.</param>
-    /// <param name="forward">They are the request's headers sent to the authorizer besides Authorization, such as cookie.</param>
-    /// <param name="respond">They are the authorizer's response headers added to the service's response, such as set-cookie.</param>
-    /// <param name="open">It sends a request the authorizer can't answer for on, without its headers, rather than answering 503.</param>
-    /// <param name="timeout">It is how long the edge waits for the authorizer, up to 5 seconds; by default 2.</param>
-    /// <param name="skip">They are the requests sent on without asking: path prefixes under the routes, such as /assets/, and file extensions, such as *.js.</param>
-    public ProtoStrapService Authorize<T>(IResourceBuilder<T> by, string? path = null, string[]? headers = null, string[]? forward = null,
-        string[]? respond = null, bool open = false, TimeSpan? timeout = null, string[]? skip = null)
-        where T : IResource
-    {
-        Settings.Authorize = new(by.Resource, path, headers ?? [], forward ?? [], respond ?? [], open, timeout, skip ?? []);
-        return this;
-    }
-
-    /// <summary>
     /// Ready sets the service's readiness check, which defaults to the path of a readiness probe,
     /// otherwise the path of WithHttpHealthCheck, on the port of its endpoint.
     /// </summary>
@@ -180,12 +201,6 @@ public sealed class ProtoStrapService
 
     /// <summary>Ready sets the service's readiness check to an HTTP path, such as "/healthz".</summary>
     public ProtoStrapService Ready(string path) { Settings.Ready = Readiness.Http(path); return this; }
-
-    /// <summary>
-    /// Protocol sets what the gateway speaks to the service, which defaults to Grpc with
-    /// Ready(Readiness.Grpc), otherwise Http1.
-    /// </summary>
-    public ProtoStrapService Protocol(GatewayProtocol protocol) { Settings.Protocol = protocol; return this; }
 
     /// <summary>Metrics sets the service's Prometheus endpoint, for metric signals and limits.</summary>
     public ProtoStrapService Metrics(int port, string path = "/metrics") { Settings.Metrics = new(port, path); return this; }

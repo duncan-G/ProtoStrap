@@ -7,7 +7,7 @@ namespace Aspire.Hosting;
 /// <summary>
 /// These extension methods say what kind of ProtoStrap component a compute resource is, in the
 /// style of Aspire's own PublishAsDockerComposeService. Every callback runs when the
-/// protostrap-spec step writes the spec, and under `aspire run` only when the local edge reads
+/// protostrap-spec step writes the spec, and under `aspire run` only when the local gateway reads
 /// a service's routes; otherwise run mode is unchanged.
 /// </summary>
 public static class ProtoStrapComponentExtensions
@@ -169,7 +169,7 @@ public static class ProtoStrapComponentExtensions
         return resource;
     }
 
-    // The settings are kept in run mode too, where the local edge routes by them; the
+    // The settings are kept in run mode too, where the local gateway routes by them; the
     // callback still runs only when they are read.
     private static IResourceBuilder<T> PublishAsProtoStrap<T>(this IResourceBuilder<T> builder, string method, Func<ComponentSettings> configure)
         where T : IComputeResource

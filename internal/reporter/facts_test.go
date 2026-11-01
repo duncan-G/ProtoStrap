@@ -19,6 +19,7 @@ pools:
   general: { vm: [m7g.large], min: 1, max: 4 }
   compute: { vm: [c7g.large], min: 0, max: 3 }
   data: { vm: m7g.large }
+telemetry: {}
 components:
   api:
     kind: service

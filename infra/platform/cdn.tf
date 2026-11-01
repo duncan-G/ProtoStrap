@@ -1,5 +1,5 @@
-# The CDN (docs/network.md#cloudflare) is Cloudflare in front of everything. Every host
-# points at the tunnel; Cloudflare terminates TLS, sends plain HTTP to HTTPS, caches static
+# The CDN (docs/network.md#cloudflare) is Cloudflare in front of everything. With a tunnel,
+# every host points at it; Cloudflare terminates TLS, sends plain HTTP to HTTPS, caches static
 # assets (its default, which leaves API responses alone), and checks who operators are
 # before an operator UI gets a request. The zone already exists: it is referenced, never
 # created.
@@ -14,7 +14,7 @@ resource "cloudflare_dns_record" "host" {
   for_each = toset(local.tunnel_hosts)
   zone_id  = data.cloudflare_zone.app.id
   name     = each.key
-  content  = "${cloudflare_zero_trust_tunnel_cloudflared.edge.id}.cfargotunnel.com"
+  content  = "${one(cloudflare_zero_trust_tunnel_cloudflared.edge[*].id)}.cfargotunnel.com"
   type     = "CNAME"
   proxied  = true
   ttl      = 1
