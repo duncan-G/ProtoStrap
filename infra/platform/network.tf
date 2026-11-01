@@ -22,16 +22,15 @@ locals {
   }
   resolver = cidrhost(var.vpc_cidr, 2)
 
-  # These are the ports VMs use to talk to each other: Swarm, the overlay, the scheduler, and
-  # Docker sending replicas' output to the telemetry collector on data-1 (telemetry.tf).
-  vm_ports = {
+  # These are the ports VMs use to talk to each other: Swarm, the overlay, the scheduler, and,
+  # with telemetry, Docker sending replicas' output to the collector on data-1 (telemetry.tf).
+  vm_ports = merge({
     swarm_manager = { protocol = "tcp", port = 2377 }
     gossip_tcp    = { protocol = "tcp", port = 7946 }
     gossip_udp    = { protocol = "udp", port = 7946 }
     overlay       = { protocol = "udp", port = 4789 }
     scheduler     = { protocol = "tcp", port = 7443 }
-    telemetry     = { protocol = "tcp", port = 24224 }
-  }
+  }, local.has_telemetry ? { telemetry = { protocol = "tcp", port = 24224 } } : {})
 }
 
 resource "aws_vpc" "main" {
@@ -256,7 +255,8 @@ resource "aws_vpc_security_group_egress_rule" "node_extra" {
 }
 
 # Ingress VMs also have the ingress group: HTTPS in from the other VMs, for the NAT to
-# forward, and the tunnel out. Only ingress VMs can reach Cloudflare's tunnel port.
+# forward, and, with a tunnel, the tunnel out. Only ingress VMs can reach Cloudflare's tunnel
+# port.
 resource "aws_security_group" "ingress" {
   name        = "protostrap-ingress"
   description = "Ingress VMs: NAT for the other VMs, and the Cloudflare tunnel."
@@ -284,7 +284,7 @@ resource "aws_vpc_security_group_ingress_rule" "ingress_nat_extra" {
 }
 
 resource "aws_vpc_security_group_egress_rule" "ingress_tunnel" {
-  for_each          = toset(["tcp", "udp"])
+  for_each          = local.has_tunnel ? toset(["tcp", "udp"]) : toset([])
   security_group_id = aws_security_group.ingress.id
   cidr_ipv4         = "0.0.0.0/0"
   ip_protocol       = each.key

@@ -27,7 +27,7 @@ The design is `docs/secrets.md` at the spec's `protostrap:` version.
 | ------------------- | --------------------------------------------------------------------- |
 | The component's own | That component. Its name in PascalCase plus `_`: `document-import` → `DocumentImport_`, `api` → `Api_`. A name whose prefix would be reserved or invalid (`shared`, `reporter`, a leading digit) needs `secret_prefix` |
 | `Shared_`           | The components that list the key in their `secrets`. Only a listed key replaces a component when it changes, or becomes a secret file |
-| `Edge_`             | The edge: `Edge_TUNNEL_TOKEN`                                         |
+| `Edge_`             | The edge, when the spec has a tunnel: `Edge_TUNNEL_TOKEN`, set with `scripts/set-edge-token.sh` |
 | `Reporter_`         | The reporter: `Reporter_ANTHROPIC_API_KEY`                            |
 
 - Key names are in environment-variable form, `ConnectionStrings__postgres`,

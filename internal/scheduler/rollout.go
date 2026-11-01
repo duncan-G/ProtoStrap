@@ -107,7 +107,7 @@ func (s *Scheduler) rolloutFailure() string {
 		}
 		switch r.Kind {
 		case api.KindEdge:
-			return r.Fingerprint == prev.rel.Edge.Fingerprint
+			return hasEdge(prev) && r.Fingerprint == s.edgeFingerprint(prev)
 		case api.KindTelemetry:
 			return r.Fingerprint == prev.rel.Telemetry.Fingerprint
 		}
@@ -341,9 +341,18 @@ func (s *Scheduler) reconcileStateful(tgt *target, c *spec.Component, open bool,
 }
 
 // reconcileEdge runs one edge on every ingress VM, and replaces an old edge by starting
-// the new one beside it, on the same VM, and stopping the old once the new is ready.
+// the new one beside it, on the same VM, and stopping the old once the new is ready. A
+// release without a gateway runs none.
 func (s *Scheduler) reconcileEdge(tgt *target, now time.Time) {
-	fp := tgt.rel.Edge.Fingerprint
+	if !hasEdge(tgt) {
+		for _, r := range s.st.replicas {
+			if r.Kind == api.KindEdge && r.live() {
+				s.stop(r, "the release has no gateway")
+			}
+		}
+		return
+	}
+	fp := s.edgeFingerprint(tgt)
 	for _, vmID := range slices.Sorted(maps.Keys(s.st.vms)) {
 		vm := s.st.vms[vmID]
 		if vm.Pool != "ingress" || vm.Lost {
@@ -414,8 +423,10 @@ func (s *Scheduler) rolloutDone(tgt *target, migrations map[string]*migration) b
 		}
 		var fp string
 		switch {
+		case r.Kind == api.KindEdge && !hasEdge(tgt):
+			return false // The edge of a release with a gateway is still stopping.
 		case r.Kind == api.KindEdge:
-			fp = tgt.rel.Edge.Fingerprint
+			fp = s.edgeFingerprint(tgt)
 		case r.Kind == api.KindTelemetry:
 			fp = tgt.rel.Telemetry.Fingerprint
 		case tgt.spec.Components[r.Component] == nil:
@@ -446,7 +457,7 @@ func (s *Scheduler) rolloutDone(tgt *target, migrations map[string]*migration) b
 		}
 	}
 	for _, vm := range s.st.vms {
-		if vm.Pool == "ingress" && !vm.Lost && vm.Terminating == nil && !vm.Cordoned {
+		if hasEdge(tgt) && vm.Pool == "ingress" && !vm.Lost && vm.Terminating == nil && !vm.Cordoned {
 			ok := false
 			for _, r := range s.st.replicas {
 				if r.Kind == api.KindEdge && r.VM == vm.ID && r.live() && r.State == api.StateReady {
@@ -479,8 +490,8 @@ func (s *Scheduler) newReplica(tgt *target, c *spec.Component, now time.Time) *R
 func (s *Scheduler) newEdge(tgt *target, now time.Time) *Replica {
 	id := s.newID("edge")
 	r := &Replica{ID: id, Component: "edge", Kind: api.KindEdge, Release: tgt.rel.Commit,
-		Fingerprint: tgt.rel.Edge.Fingerprint, Pool: "ingress", State: StatePending,
-		Request: tgt.spec.Edge.Request.API(), Spec: s.edgeSpec(tgt, id), Created: now}
+		Fingerprint: s.edgeFingerprint(tgt), Pool: "ingress", State: StatePending,
+		Request: tgt.spec.Gateway.Request.API(), Spec: s.edgeSpec(tgt, id), Created: now}
 	r.SecretDigest, r.SecretVersion = r.Spec.SecretDigest, r.Spec.SecretVersion
 	s.st.replicas[id] = r
 	return r

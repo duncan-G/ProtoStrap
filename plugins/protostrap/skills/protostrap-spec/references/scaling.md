@@ -9,7 +9,7 @@ spec's version. This is how to choose.
 | ------------------------- | ----------------------- | --------------------------------------------------------------- | --------------------------- |
 | .NET (ASP.NET, gRPC)      | Multi-threaded          | `cpu: 70%`; a `metric` on thread pool queue length if it stalls | A bigger `request` first, then replicas |
 | Node.js (Express, etc.)   | One thread per process  | `cpu: 70%` and `metric: nodejs_eventloop_lag_seconds, target: 0.05` | Replicas only           |
-| Python (FastAPI, uvicorn) | One process, the GIL    | `requests: <what one replica serves>/s` (routed services only) and `cpu: 70%` | Replicas only |
+| Python (FastAPI, uvicorn) | One process, the GIL    | `requests: <what one replica serves>/s` (upstreams of the gateway only) and `cpu: 70%` | Replicas only |
 | Worker on a queue         | Any                     | `queue: <name>, rate: <jobs/s one replica does>, drain: 60s`    | Replicas, from zero         |
 
 - **Single-threaded runtimes** use one core however big the request, so give them about one

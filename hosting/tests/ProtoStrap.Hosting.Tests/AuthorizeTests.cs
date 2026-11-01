@@ -5,40 +5,49 @@ using ProtoStrap.Hosting.Tests.Support;
 namespace ProtoStrap.Hosting.Tests;
 
 /// <summary>
-/// A service's requests can be authorized at the edge by another service, which the edge asks
-/// about each request before sending it on (docs/protostrap.md, "Authorizing requests").
+/// An upstream's requests can be authorized at the gateway by another service, which the gateway
+/// asks about each request before sending it on (docs/protostrap.md, "Authorizing requests").
 /// </summary>
 public class AuthorizeTests
 {
-    private static IResourceBuilder<ProjectResource> AddAuth(IDistributedApplicationBuilder builder, FixtureRepo repo, bool routed = true) =>
-        builder.AddProject("auth", repo.Project("services/auth/Auth.csproj", "Microsoft.NET.Sdk.Web"))
+    private static IResourceBuilder<ProtoStrapGatewayResource> AddGateway(IDistributedApplicationBuilder builder) =>
+        builder.AddEnvironment().AddEnvoyGateway("gateway").WithHost("app", "protofast.dev", local: "app.localhost");
+
+    private static IResourceBuilder<ProjectResource> AddAuth(IDistributedApplicationBuilder builder, FixtureRepo repo, IResourceBuilder<ProtoStrapGatewayResource> gateway, bool routed = true)
+    {
+        var auth = builder.AddProject("auth", repo.Project("services/auth/Auth.csproj", "Microsoft.NET.Sdk.Web"))
             .WithHttpEndpoint(targetPort: 8080, name: "http")
             .WithHttpHealthCheck("/healthz")
-            .PublishAsProtoStrapService(s =>
-            {
-                s.Request(cpu: "250m", memory: "256Mi");
-                if (routed)
-                    s.Routes("app/auth/");
-            });
+            .PublishAsProtoStrapService(s => s.Request(cpu: "250m", memory: "256Mi"));
+        if (routed)
+            gateway.WithUpstream(auth, u => u.Routes("app/auth/"));
+        return auth;
+    }
+
+    private static IResourceBuilder<ProjectResource> AddWeb(IDistributedApplicationBuilder builder, FixtureRepo repo, string name, int port) =>
+        builder.AddProject(name, repo.Project($"services/{name}/{name}.csproj", "Microsoft.NET.Sdk.Web"))
+            .WithHttpEndpoint(targetPort: port, name: "http")
+            .WithHttpHealthCheck("/healthz")
+            .PublishAsProtoStrapService(s => s.Request(cpu: "250m", memory: "256Mi"));
+
+    private static IResourceBuilder<ProjectResource> AddApi(IDistributedApplicationBuilder builder, FixtureRepo repo) =>
+        builder.AddProject("api", repo.Project("services/api/Api.csproj", "Microsoft.NET.Sdk.Web"))
+            .PublishAsProtoStrapService(s => s.Request(cpu: "500m", memory: "512Mi").Ready(Readiness.Grpc));
 
     [Fact]
     public async Task AServicesRequestsAreAuthorizedByAnother()
     {
         using var repo = new FixtureRepo();
         var builder = TestApp.Publish(repo);
-        builder.AddEnvironment().WithHost("app", "protofast.dev", local: "app.localhost");
-        var auth = AddAuth(builder, repo);
-        builder.AddProject("api", repo.Project("services/api/Api.csproj", "Microsoft.NET.Sdk.Web"))
-            .PublishAsProtoStrapService(s => s
-                .Request(cpu: "500m", memory: "512Mi")
-                .Ready(Readiness.Grpc)
-                .Routes("app/api/")
-                .Authorize(auth, path: "/auth/check", headers: ["x-identity"], forward: ["cookie"]));
+        var gateway = AddGateway(builder);
+        var auth = AddAuth(builder, repo, gateway);
+        gateway.WithUpstream(AddApi(builder, repo), u => u.Routes("app/api/").Authorize(auth, path: "/auth/check", headers: ["x-identity"], forward: ["cookie"]));
 
         var yaml = await TestApp.GenerateYamlAsync(builder);
 
-        Assert.Contains("\n  routes: [app/api/]\n  authorize: { by: auth, path: /auth/check, headers: [x-identity], forward: [cookie] }\n", SpecText.Component(yaml, "api"));
-        Assert.DoesNotContain("authorize", SpecText.Component(yaml, "auth"));
+        Assert.Contains("\n  routes: [app/api/]\n  authorize: { by: auth, path: /auth/check, headers: [x-identity], forward: [cookie] }\n", SpecText.Upstream(yaml, "api"));
+        Assert.DoesNotContain("authorize", SpecText.Upstream(yaml, "auth"));
+        Assert.DoesNotContain("authorize", SpecText.Component(yaml, "api"));
     }
 
     [Fact]
@@ -48,24 +57,17 @@ public class AuthorizeTests
         // renewed with the session.
         using var repo = new FixtureRepo();
         var builder = TestApp.Publish(repo);
-        builder.AddEnvironment().WithHost("app", "protofast.dev", local: "app.localhost");
-        var auth = AddAuth(builder, repo);
-        builder.AddProject("api", repo.Project("services/api/Api.csproj", "Microsoft.NET.Sdk.Web"))
-            .PublishAsProtoStrapService(s => s
-                .Request(cpu: "500m", memory: "512Mi")
-                .Ready(Readiness.Grpc)
-                .Routes("app/api/")
-                .Authorize(auth, path: "/auth/check", headers: ["x-identity"], forward: ["cookie"], respond: ["set-cookie"]));
-        builder.AddProject("web", repo.Project("services/web/Web.csproj", "Microsoft.NET.Sdk.Web"))
-            .WithHttpEndpoint(targetPort: 4000, name: "http")
-            .WithHttpHealthCheck("/healthz")
-            .PublishAsProtoStrapService(s => s.Request(cpu: "250m", memory: "256Mi").Routes("app/").Authorize(auth, respond: []));
+        var gateway = AddGateway(builder);
+        var auth = AddAuth(builder, repo, gateway);
+        gateway.WithUpstream(AddApi(builder, repo), u => u.Routes("app/api/")
+                .Authorize(auth, path: "/auth/check", headers: ["x-identity"], forward: ["cookie"], respond: ["set-cookie"]))
+            .WithUpstream(AddWeb(builder, repo, "web", 4000), u => u.Routes("app/").Authorize(auth, respond: []));
 
         var yaml = await TestApp.GenerateYamlAsync(builder);
 
-        Assert.Contains("\n  authorize: { by: auth, path: /auth/check, headers: [x-identity], forward: [cookie], respond: [set-cookie] }\n", SpecText.Component(yaml, "api"));
+        Assert.Contains("\n  authorize: { by: auth, path: /auth/check, headers: [x-identity], forward: [cookie], respond: [set-cookie] }\n", SpecText.Upstream(yaml, "api"));
         // Nothing to respond with is no respond.
-        Assert.Contains("\n  authorize: { by: auth }\n", SpecText.Component(yaml, "web"));
+        Assert.Contains("\n  authorize: { by: auth }\n", SpecText.Upstream(yaml, "web"));
     }
 
     [Fact]
@@ -75,28 +77,20 @@ public class AuthorizeTests
         // as its timeout, and doesn't ask about the requests skip names.
         using var repo = new FixtureRepo();
         var builder = TestApp.Publish(repo);
-        builder.AddEnvironment().WithHost("app", "protofast.dev", local: "app.localhost");
-        var auth = AddAuth(builder, repo);
-        builder.AddProject("web", repo.Project("services/web/Web.csproj", "Microsoft.NET.Sdk.Web"))
-            .WithHttpEndpoint(targetPort: 4000, name: "http")
-            .WithHttpHealthCheck("/healthz")
-            .PublishAsProtoStrapService(s => s.Request(cpu: "250m", memory: "256Mi").Routes("app")
-                .Authorize(auth, headers: ["x-identity"], open: true, timeout: TimeSpan.FromMilliseconds(500), skip: ["/assets/", "*.js", "*.woff2"]));
-        builder.AddProject("api", repo.Project("services/api/Api.csproj", "Microsoft.NET.Sdk.Web"))
-            .PublishAsProtoStrapService(s => s.Request(cpu: "500m", memory: "512Mi").Ready(Readiness.Grpc).Routes("app/api/")
-                .Authorize(auth, open: false, timeout: TimeSpan.FromSeconds(1), skip: ["/api/"]));
-        builder.AddProject("admin", repo.Project("services/admin/Admin.csproj", "Microsoft.NET.Sdk.Web"))
-            .WithHttpEndpoint(targetPort: 4001, name: "http")
-            .WithHttpHealthCheck("/healthz")
-            .PublishAsProtoStrapService(s => s.Request(cpu: "250m", memory: "256Mi").Routes("app/admin/").Authorize(auth, skip: []));
+        var gateway = AddGateway(builder);
+        var auth = AddAuth(builder, repo, gateway);
+        gateway.WithUpstream(AddWeb(builder, repo, "web", 4000), u => u.Routes("app")
+                .Authorize(auth, headers: ["x-identity"], open: true, timeout: TimeSpan.FromMilliseconds(500), skip: ["/assets/", "*.js", "*.woff2"]))
+            .WithUpstream(AddApi(builder, repo), u => u.Routes("app/api/").Authorize(auth, open: false, timeout: TimeSpan.FromSeconds(1), skip: ["/api/"]))
+            .WithUpstream(AddWeb(builder, repo, "admin", 4001), u => u.Routes("app/admin/").Authorize(auth, skip: []));
 
         var yaml = await TestApp.GenerateYamlAsync(builder);
 
         // An extension is quoted: a plain *.js would be an alias.
-        Assert.Contains("\n  authorize: { by: auth, headers: [x-identity], open: true, timeout: 500ms, skip: [/assets/, \"*.js\", \"*.woff2\"] }\n", SpecText.Component(yaml, "web"));
+        Assert.Contains("\n  authorize: { by: auth, headers: [x-identity], open: true, timeout: 500ms, skip: [/assets/, \"*.js\", \"*.woff2\"] }\n", SpecText.Upstream(yaml, "web"));
         // A prefix can be a whole route, and a closed authorizer writes nothing.
-        Assert.Contains("\n  authorize: { by: auth, timeout: 1s, skip: [/api/] }\n", SpecText.Component(yaml, "api"));
-        Assert.Contains("\n  authorize: { by: auth }\n", SpecText.Component(yaml, "admin"));
+        Assert.Contains("\n  authorize: { by: auth, timeout: 1s, skip: [/api/] }\n", SpecText.Upstream(yaml, "api"));
+        Assert.Contains("\n  authorize: { by: auth }\n", SpecText.Upstream(yaml, "admin"));
     }
 
     [Fact]
@@ -104,13 +98,10 @@ public class AuthorizeTests
     {
         using var repo = new FixtureRepo();
         var builder = TestApp.Publish(repo);
-        builder.AddEnvironment().WithHost("app", "protofast.dev", local: "app.localhost");
-        var auth = AddAuth(builder, repo);
-        IResourceBuilder<ProjectResource> Web(string name, int port, TimeSpan? timeout, string[] skip) =>
-            builder.AddProject(name, repo.Project($"services/{name}/{name}.csproj", "Microsoft.NET.Sdk.Web"))
-                .WithHttpEndpoint(targetPort: port, name: "http")
-                .WithHttpHealthCheck("/healthz")
-                .PublishAsProtoStrapService(s => s.Request(cpu: "250m", memory: "256Mi").Routes($"app/{name}/").Authorize(auth, timeout: timeout, skip: skip));
+        var gateway = AddGateway(builder);
+        var auth = AddAuth(builder, repo, gateway);
+        void Web(string name, int port, TimeSpan? timeout, string[] skip) =>
+            gateway.WithUpstream(AddWeb(builder, repo, name, port), u => u.Routes($"app/{name}/").Authorize(auth, timeout: timeout, skip: skip));
         Web("web", 4000, TimeSpan.Zero, ["/other/", "web/assets/", "/web/assets", "/web//assets/", "/web/x/../assets/", "*.JS", "*.min.js", "*"]);
         Web("admin", 4001, TimeSpan.FromSeconds(6), []);
         Web("docs", 4002, TimeSpan.FromMicroseconds(500), [.. Enumerable.Range(0, 31).Select(i => $"*.x{i}")]);
@@ -139,16 +130,13 @@ public class AuthorizeTests
     {
         using var repo = new FixtureRepo();
         var builder = TestApp.Publish(repo);
-        builder.AddEnvironment().WithHost("app", "protofast.dev", local: "app.localhost");
-        var auth = AddAuth(builder, repo, routed: false);
-        builder.AddProject("web", repo.Project("services/web/Web.csproj", "Microsoft.NET.Sdk.Web"))
-            .WithHttpEndpoint(targetPort: 4000, name: "http")
-            .WithHttpHealthCheck("/healthz")
-            .PublishAsProtoStrapService(s => s.Request(cpu: "250m", memory: "256Mi").Routes("app/").Authorize(auth));
+        var gateway = AddGateway(builder);
+        var auth = AddAuth(builder, repo, gateway, routed: false);
+        gateway.WithUpstream(AddWeb(builder, repo, "web", 4000), u => u.Routes("app/").Authorize(auth));
 
         var yaml = await TestApp.GenerateYamlAsync(builder);
 
-        Assert.Contains("\n  authorize: { by: auth }\n", SpecText.Component(yaml, "web"));
+        Assert.Contains("\n  authorize: { by: auth }\n", SpecText.Upstream(yaml, "web"));
     }
 
     [Fact]
@@ -156,25 +144,17 @@ public class AuthorizeTests
     {
         using var repo = new FixtureRepo();
         var builder = TestApp.Publish(repo);
-        builder.AddEnvironment().WithHost("app", "protofast.dev", local: "app.localhost");
-        var auth = AddAuth(builder, repo);
+        var gateway = AddGateway(builder);
+        var auth = AddAuth(builder, repo, gateway);
         var redis = builder.AddRedis("redis").PublishAsProtoStrapStateful(s => s.Vm("data-1").Request(cpu: "250m", memory: "512Mi").Volume(size: "5Gi"));
         var smtp = builder.AddContainer("smtp4dev", "rnwood/smtp4dev", "3.8").ExcludeFromManifest();
-        builder.AddProject("api", repo.Project("services/api/Api.csproj", "Microsoft.NET.Sdk.Web"))
-            .PublishAsProtoStrapService(s => s.Request(cpu: "500m", memory: "512Mi").Ready(Readiness.Grpc)
-                .Authorize(auth, path: "check", headers: ["X Identity"], forward: ["host"], respond: [":status", "content-length", "connection"]));
-        builder.AddProject("web", repo.Project("services/web/Web.csproj", "Microsoft.NET.Sdk.Web"))
-            .WithHttpEndpoint(targetPort: 4000, name: "http")
-            .WithHttpHealthCheck("/healthz")
-            .PublishAsProtoStrapService(s => s.Request(cpu: "250m", memory: "256Mi").Routes("app/").Authorize(redis));
-        builder.AddProject("admin", repo.Project("services/admin/Admin.csproj", "Microsoft.NET.Sdk.Web"))
-            .WithHttpEndpoint(targetPort: 4001, name: "http")
-            .WithHttpHealthCheck("/healthz")
-            .PublishAsProtoStrapService(s => s.Request(cpu: "250m", memory: "256Mi").Routes("app/admin/").Authorize(smtp));
+        gateway.WithUpstream(AddApi(builder, repo), u => u.Routes("app/api/")
+                .Authorize(auth, path: "check", headers: ["X Identity"], forward: ["host"], respond: [":status", "content-length", "connection"]))
+            .WithUpstream(AddWeb(builder, repo, "web", 4000), u => u.Routes("app/").Authorize(redis))
+            .WithUpstream(AddWeb(builder, repo, "admin", 4001), u => u.Routes("app/admin/").Authorize(smtp));
 
         var problems = await TestApp.ProblemsAsync(builder);
 
-        Assert.Contains("api: Authorize: only a service with routes takes requests through the edge", problems);
         Assert.Contains("api: Authorize: path \"check\" must start with /", problems);
         Assert.Contains("api: Authorize: \"X Identity\" isn't a header name: lower case, such as x-user", problems);
         Assert.Contains("api: Authorize: the edge sets host itself", problems);

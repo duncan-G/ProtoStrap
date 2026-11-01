@@ -83,7 +83,7 @@ func TestTelemetryRunsOnceOnDataOne(t *testing.T) {
 
 func TestTelemetrySettingsReachTheReplica(t *testing.T) {
 	h := newHarness(t)
-	spec := strings.Replace(testSpec, "queues:\n", "telemetry:\n  request: { cpu: 250m, memory: 1Gi }\n  retention: { logs: 7d, traces: 3d, metrics: 30d }\nqueues:\n", 1)
+	spec := strings.Replace(testSpec, "telemetry: {}\n", "telemetry:\n  request: { cpu: 250m, memory: 1Gi }\n  retention: { logs: 7d, traces: 3d, metrics: 30d }\n", 1)
 	h.deploy("c1", spec, nil)
 	h.until("the release finishes", 10*time.Minute, func() bool { return h.rollout("c1") == RolloutDone })
 	s := h.telemetrySpec()
@@ -120,7 +120,7 @@ func TestDataOnesAssignmentListsTheScrapeTargets(t *testing.T) {
 
 	// A new endpoint reaches Prometheus as a file, without replacing the replica.
 	before := h.running("telemetry")
-	spec := strings.Replace(testSpec, "    routes: [/web/]\n", "    routes: [/web/]\n    metrics: 9100/stats\n", 1)
+	spec := strings.Replace(testSpec, "    depends_on: [api]\n", "    depends_on: [api]\n    metrics: 9100/stats\n", 1)
 	h.deploy("c2", spec, nil)
 	h.until("c2 finishes", 10*time.Minute, func() bool { return h.rollout("c2") == RolloutDone })
 	got, _ = telemetry.ParseTargets([]byte(h.agents["i-data1"].assignment.Files[telemetry.ScrapeFile]))
@@ -185,7 +185,7 @@ func TestTheSpecsEnvWinsForTheOTELVariables(t *testing.T) {
 	h := newHarness(t)
 	spec := strings.Replace(testSpec, "    env: { MODE: prod }\n",
 		"    env: { MODE: prod, OTEL_EXPORTER_OTLP_ENDPOINT: \"http://otel-collector:4317\", OTEL_SERVICE_NAME: shop-api }\n", 1)
-	spec = strings.Replace(spec, "    routes: [/web/]\n", "    routes: [/web/]\n    env: { OTEL_EXPORTER_OTLP_PROTOCOL: grpc }\n", 1)
+	spec = strings.Replace(spec, "    depends_on: [api]\n", "    depends_on: [api]\n    env: { OTEL_EXPORTER_OTLP_PROTOCOL: grpc }\n", 1)
 	h.deploy("c1", spec, nil)
 	h.until("the release finishes", 10*time.Minute, func() bool { return h.rollout("c1") == RolloutDone })
 
@@ -219,7 +219,7 @@ func TestChangingTelemetryStopsTheOldReplicaFirst(t *testing.T) {
 	h := newHarness(t)
 	h.settle()
 	old := h.running("telemetry")
-	spec := strings.Replace(testSpec, "queues:\n", "telemetry:\n  retention: { logs: 7d }\nqueues:\n", 1)
+	spec := strings.Replace(testSpec, "telemetry: {}\n", "telemetry:\n  retention: { logs: 7d }\n", 1)
 	h.deploy("c2", spec, nil)
 	for i := 0; i < 200 && h.rollout("c2") != RolloutDone; i++ {
 		h.step()
@@ -267,7 +267,7 @@ func TestTelemetryThatNeverGetsReadyRollsTheReleaseBack(t *testing.T) {
 	h := newHarness(t)
 	h.settle()
 	h.neverReady["telemetry"] = true
-	spec := strings.Replace(testSpec, "queues:\n", "telemetry:\n  retention: { logs: 7d }\nqueues:\n", 1)
+	spec := strings.Replace(testSpec, "telemetry: {}\n", "telemetry:\n  retention: { logs: 7d }\n", 1)
 	h.deploy("c2", spec, nil)
 	h.until("c2 fails", 15*time.Minute, func() bool { return h.rollout("c2") == RolloutFailed })
 	if reason := h.rolloutReason("c2"); !strings.Contains(reason, "telemetry") {

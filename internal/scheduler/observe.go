@@ -196,6 +196,9 @@ func (s *Scheduler) adoptOne(vm *VM, rr api.ReplicaReport, rel *target, now time
 			continue
 		}
 		if kind == api.KindEdge {
+			if !hasEdge(t) {
+				continue
+			}
 			rep.Spec = s.edgeSpec(t, rep.ID)
 			break
 		}

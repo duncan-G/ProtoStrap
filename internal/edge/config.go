@@ -1,7 +1,8 @@
-// Package edge is ProtoStrap's edge: cloudflared and Envoy in one container, alone on each
-// zone's ingress VM (docs/protostrap.md#edge). The scheduler renders Envoy's listener and
-// clusters from the spec's routes (Files), the agent writes them where the edge reads them,
-// and `protostrap edge`, the container's entrypoint, runs both programs (Run).
+// Package edge is ProtoStrap's edge: the gateway, Envoy, and the tunnel, cloudflared, in one
+// container, alone on each zone's ingress VM (docs/protostrap.md#gateway). The scheduler renders
+// Envoy's listener and clusters from the gateway's upstreams (Files), the agent writes them
+// where the edge reads them, and `protostrap edge`, the container's entrypoint, runs both
+// programs, or Envoy alone without the tunnel (Run).
 package edge
 
 import (

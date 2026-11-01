@@ -25,7 +25,7 @@ The secret is one JSON object of keys, each starting with who it is for:
 | ------------------------ | ------------------------------------------------------------------------- |
 | The component's own      | That component. `document-import`'s is `DocumentImport_`; set `secret_prefix` in the spec to choose another, or to share one, such as a migration task that uses `Api_` |
 | `Shared_`                | Any component that lists the key in `secrets`                             |
-| `Edge_`                  | The edge: `Edge_TUNNEL_TOKEN`                                             |
+| `Edge_`                  | The edge, when the spec has a tunnel: `Edge_TUNNEL_TOKEN`                 |
 | `Reporter_`              | The reporter: `Reporter_ANTHROPIC_API_KEY`                                |
 
 For example:

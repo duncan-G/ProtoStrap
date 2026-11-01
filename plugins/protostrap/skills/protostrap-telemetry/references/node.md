@@ -28,7 +28,7 @@ import { PeriodicExportingMetricReader } from '@opentelemetry/sdk-metrics';
 // ES modules, Express among them, are instrumented only through this hook.
 register('@opentelemetry/instrumentation/hook.mjs', import.meta.url);
 
-// ProtoStrap and `aspire run` set the endpoint. Without it, export nothing.
+// ProtoStrap with telemetry and `aspire run` set the endpoint. Without it, export nothing.
 export const sdk = process.env.OTEL_EXPORTER_OTLP_ENDPOINT
   ? new NodeSDK({
       // The exporters read the endpoint and add /v1/traces and /v1/metrics; the SDK reads

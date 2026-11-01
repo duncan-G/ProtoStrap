@@ -445,7 +445,8 @@ func TestRemovedComponentsStop(t *testing.T) {
 	h := newHarness(t)
 	h.settle()
 	without := strings.Replace(testSpec, "    depends_on: [api]\n", "", 1)
-	start := strings.Index(without, "  web:\n")
+	without = strings.Replace(without, "    web:\n      routes: [/web/]\n", "", 1)
+	start := strings.Index(without, "\n  web:\n") + 1
 	end := strings.Index(without, "  worker:\n")
 	without = without[:start] + without[end:]
 	h.deploy("c2", without, nil)

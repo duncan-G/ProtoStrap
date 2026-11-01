@@ -3,13 +3,11 @@
 # load (see sample/README.md and sample/services/README.md), so deploys, replica scaling,
 # VM scaling and scaling from zero can all be tested end to end.
 #
-# The sample has one host, sample. Its hostname differs between accounts, so each account's
-# Terraform config gives it one (sample/infra/test/main.tf). Routes are paths, which match
-# every host.
+# The sample runs ProtoStrap's tunnel, gateway and telemetry. The gateway has one host,
+# sample. Its hostname differs between accounts, so each account's Terraform config gives it
+# one (sample/infra/test/main.tf). Routes are paths, which match every host.
 app: sample
-protostrap: 0.1.1
-hosts:
-  sample: sample.example.com
+protostrap: 0.1.2
 
 pools:
   ingress: { vm: c8g.medium }
@@ -29,8 +27,21 @@ pools:
     reserved: { cpu: 400m, memory: 1Gi }
   data: { vm: m7g.large, count: 1 }
 
-edge:
+tunnel: {}
+
+gateway:
   request: { cpu: 500m, memory: 256Mi }
+  hosts:
+    sample: sample.example.com
+  upstreams:
+    api:
+      routes: [/api/, /sample.Api/]
+    web:
+      routes: [/web/]
+    py:
+      routes: [{ route: /py/, rate: 200/s }]
+
+telemetry: {}
 
 queues:
   jobs: {}
@@ -50,7 +61,6 @@ components:
     request: { cpu: 500m, memory: 512Mi }
     port: 8080
     ready: grpc
-    routes: [/api/, /sample.Api/]
     metrics: 9090/metrics
     depends_on: [postgres, redis]
     uses: [jobs]
@@ -73,7 +83,6 @@ components:
     request: { cpu: 250m, memory: 256Mi }
     port: 3000
     ready: /healthz
-    routes: [/web/]
     metrics: 9464/metrics
     depends_on: [api]
     env:
@@ -86,8 +95,8 @@ components:
         - { cpu: 70% }
         - { metric: nodejs_eventloop_lag_seconds, target: 0.05 }
 
-  # py is a Python FastAPI service. It scales on requests per second, counted by the edge,
-  # and on CPU.
+  # py is a Python FastAPI service. It scales on requests per second, counted by the
+  # gateway, and on CPU.
   py:
     kind: service
     build: services/py
@@ -95,7 +104,6 @@ components:
     request: { cpu: 250m, memory: 256Mi }
     port: 8000
     ready: /healthz
-    routes: [{ route: /py/, rate: 200/s }]
     metrics: 8000/metrics
     depends_on: [redis]
     secrets: [ConnectionStrings__redis]

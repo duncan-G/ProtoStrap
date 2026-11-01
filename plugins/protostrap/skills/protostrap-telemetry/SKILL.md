@@ -1,14 +1,16 @@
 ---
 name: protostrap-telemetry
-description: Send logs, traces and metrics from an application deployed with ProtoStrap, and check they arrive - OpenTelemetry setup for .NET (Aspire ServiceDefaults included), Node.js and Python from the OTEL_ variables ProtoStrap sets, logs on stdout or over OTLP but never both, custom spans and metrics and registering them, trace context through SQS jobs, sampling, metrics endpoints for scale signals, label cardinality, telemetry from browsers, the spec's telemetry section, and local runs. Use when adding tracing, metrics or structured logging, when log lines appear twice, a custom metric or span never shows in Grafana, a trace stops at a queue, or telemetry's retention or size needs changing. To read telemetry while diagnosing a problem, use protostrap-operate.
+description: Send logs, traces and metrics from an application deployed with ProtoStrap, and check they arrive - OpenTelemetry setup for .NET (Aspire ServiceDefaults included), Node.js and Python from the OTEL_ variables ProtoStrap sets, logs on stdout or over OTLP but never both, custom spans and metrics and registering them, trace context through SQS jobs, sampling, metrics endpoints for scale signals, label cardinality, telemetry from browsers, the spec's telemetry section (or AddTelemetry), running without it, and local runs. Use when adding tracing, metrics or structured logging, when log lines appear twice, a custom metric or span never shows in Grafana, a trace stops at a queue, or telemetry needs adding, removing, resizing or a different retention. To read telemetry while diagnosing a problem, use protostrap-operate.
 ---
 
 # Telemetry
 
-Every deployed environment runs one telemetry replica on data-1: an OpenTelemetry collector,
-Loki for logs, Tempo for traces, Prometheus for metrics, and Grafana to read them. A service
-needs no ProtoStrap code for it: its stdout is collected, and OpenTelemetry's SDKs find the
-collector in variables ProtoStrap sets.
+A deployed environment whose spec has `telemetry` runs one telemetry replica on data-1: an
+OpenTelemetry collector, Loki for logs, Tempo for traces, Prometheus for metrics, and Grafana
+to read them. A service needs no ProtoStrap code for it: its stdout is collected, and
+OpenTelemetry's SDKs find the collector in variables ProtoStrap sets. Without the section
+there is none of it: no `OTEL_` variables, no Grafana, and each replica's stdout and stderr
+go to CloudWatch Logs, `/protostrap/<app>/<component>`.
 
 The design is `docs/telemetry.md` at the spec's `protostrap:` version
 (`.protostrap/docs/telemetry.md` or `../ProtoStrap/docs/telemetry.md` if checked out at
@@ -20,7 +22,8 @@ Code for each language: [.NET](references/dotnet.md), [Node.js](references/node.
 ## Rules for you
 
 - **No endpoint, protocol or service name in code or in the spec's `env`.** The SDK reads
-  the `OTEL_` variables. `aspire run` sets the same ones, pointing at its dashboard.
+  the `OTEL_` variables. `aspire run` sets the same ones, pointing at its dashboard. Code
+  must also run without them: export nothing then.
 - **Never log a secret, a token, a connection string, or a person's data** such as an email
   address. Everyone who can open Grafana in that environment reads every service's logs.
   The same goes for span attributes.
@@ -44,7 +47,7 @@ Every record is labelled `service_name` (the component), `service_instance_id` (
 replica, as the infra log names it) and `service_version` (the release), whichever way it
 came. Stdout lines also carry `log_iostream`, and OTLP log records carry `trace_id`.
 
-ProtoStrap sets, in every replica but its own:
+With telemetry, ProtoStrap sets, in every replica but its own:
 
 | Variable                      | Value                                                     |
 | ----------------------------- | --------------------------------------------------------- |
@@ -68,10 +71,11 @@ twice. Pick one, for each component:
   `| json`. Put the trace ID in each line to find its trace.
 
 "Under ProtoStrap" means `PROTOSTRAP_REPLICA` is set. Keep the console locally, where
-people read it.
+people read it, and under ProtoStrap without `OTEL_EXPORTER_OTLP_ENDPOINT`: without the
+spec's `telemetry`, stdout is the only way out, to CloudWatch Logs.
 
 **Aspire's ServiceDefaults exports logs over OTLP whenever `OTEL_EXPORTER_OTLP_ENDPOINT` is
-set,** which ProtoStrap always does. A ServiceDefaults that also adds a console logger
+set,** which ProtoStrap does with telemetry. A ServiceDefaults that also adds a console logger
 under ProtoStrap, for JSON lines, sends each line twice. The fix is in
 [references/dotnet.md](references/dotnet.md#aspire-servicedefaults).
 
@@ -84,7 +88,7 @@ readiness check or a metrics scrape.
   instrumentation. That covers most spans, and the clients pass `traceparent` to the
   services they call, so a request's trace crosses services with no code.
 - **Leave out the readiness path**, `ready` in the spec. It is checked continually, by the
-  agent and by Envoy, and would bury real traces.
+  agent and by the gateway, and would bury real traces.
 - **Custom spans** come from one tracer (an `ActivitySource` in .NET) named after the
   component or its assembly. **In .NET, a source that isn't added with `AddSource` records
   nothing,** silently.
@@ -122,7 +126,7 @@ Two ways in. Both land in Prometheus, but **only one drives scaling**:
   `shop.queue.backlog` becomes `shop_queue_backlog`, and a counter gains `_total`. Run the
   service and `curl` the endpoint before writing the signal.
 - **In .NET, a `Meter` that isn't added with `AddMeter` exports nothing.**
-- **The edge counts every routed service's requests** with nothing from the service:
+- **The gateway counts every upstream's requests** with nothing from the service:
   `envoy_cluster_upstream_rq_total`, by `envoy_cluster_name`.
 
 ## Checking it arrives
@@ -138,15 +142,16 @@ with their own sign-in), with `curl -sG` and `--data-urlencode`:
 | Its own metric is there  | Prometheus `count by (__name__) ({service_name="api"})`, and look for the name             |
 | Its scale metric is read | The operator UI's `/api/status`: the component's signal has a reading (Platform or Org Admins) |
 
-`http://localhost:7482/protostrap/help` describes every call.
+`http://localhost:7482/protostrap/help` describes every call. Without telemetry, only logs
+are kept, in CloudWatch Logs, which an Org Admin reads.
 
 ## Telemetry from browsers
 
 The collector isn't reachable from the internet. To take telemetry from browsers, run a
 collector of the application's own as a service: a Dockerfile `FROM` the OpenTelemetry
-collector's image, pinned by digest, with its config in the image, a route such as
-`/otlp/`, a `rate` on that route, and an exporter to `http://telemetry:4318` over OTLP/HTTP.
-Anyone can send to that route, so accept only what the browser code sends.
+collector's image, pinned by digest, with its config in the image, an upstream with a route
+such as `/otlp/`, a `rate` on that route, and an exporter to `http://telemetry:4318` over
+OTLP/HTTP. Anyone can send to that route, so accept only what the browser code sends.
 
 ## A collector of the application's own
 
@@ -171,15 +176,19 @@ telemetry:
   retention: { logs: 30d, traces: 30d, metrics: 15d }
 ```
 
-- **All of it is optional;** those are the defaults. `protostrap check` refuses a request
-  that doesn't fit on data-1 beside its stateful components.
+- **All of it is optional;** those are the defaults, which `telemetry: {}` runs. A
+  `telemetry:` with nothing after it is a `check` problem, and no section runs no telemetry.
+  `protostrap check` refuses a request that doesn't fit on data-1 beside its stateful
+  components.
 - **A change replaces the replica:** the old stops before the new starts, so nothing is
   taken in for about a minute. Say so in the pull request.
+- **Adding or removing the section** makes or removes its volume with Terraform, and
+  replaces every replica, since their output moves between telemetry and CloudWatch Logs.
 - **Its memory is a hard limit,** like any replica's. If the infra log shows the telemetry
   replica failing with exit code 137, raise `request`'s memory before raising retention.
-- **With an Aspire AppHost,** ProtoStrap.Hosting writes no `telemetry` section, so the
-  generated spec runs the defaults. Tell the user if the application needs others: the
-  generated spec can't be edited by hand.
+- **With an Aspire AppHost,** the section is `protostrap.AddTelemetry("telemetry")`, with
+  `.WithRequest(cpu:, memory:)`, `.WithVolume("30Gi")` and
+  `.WithRetention(logs: TimeSpan.FromDays(14))` for what isn't the default (protostrap-aspire).
 
 ## Locally
 
@@ -191,7 +200,8 @@ telemetry:
 ## Reviewing telemetry code
 
 Check, for each component: no endpoint or service name in code; logs leave by one path under
-ProtoStrap; every custom `ActivitySource` and `Meter` is registered (.NET); the readiness path
-isn't traced; no metric label takes unbounded values; nothing logs or tags a secret or a
-person's data; workers carry the trace through their queue; any metric a scale signal or
-limit names is served on the `metrics` endpoint under the name in the spec.
+ProtoStrap, and by stdout when no endpoint is set; every custom `ActivitySource` and `Meter`
+is registered (.NET); the readiness path isn't traced; no metric label takes unbounded
+values; nothing logs or tags a secret or a person's data; workers carry the trace through
+their queue; any metric a scale signal or limit names is served on the `metrics` endpoint
+under the name in the spec.

@@ -52,10 +52,13 @@ func TestAReleaseCarriesTelemetry(t *testing.T) {
 	}
 }
 
-// TestAnEarlierReleaseHasNoTelemetry checks that a release made before telemetry still
-// parses, with none: rolling back to it stops the telemetry replica.
+// TestAnEarlierReleaseHasNoTelemetry checks that a release made before telemetry, by
+// ProtoStrap 0.1 with its routes on the components, still parses, with no telemetry image:
+// rolling back to it stops the telemetry replica.
 func TestAnEarlierReleaseHasNoTelemetry(t *testing.T) {
-	old := `{"commit":"abc1234","app":"shop","protostrap":"1.3.0","spec":` + quote(testSpec) + `,"components":{` +
+	spec := strings.Replace(strings.Replace(testSpec, "tunnel: {}\ngateway:\n  upstreams:\n    api:\n      routes: [/api/]\ntelemetry: {}\n", "", 1),
+		"    ready: grpc\n", "    ready: grpc\n    routes: [/api/]\n", 1)
+	old := `{"commit":"abc1234","app":"shop","protostrap":"1.3.0","spec":` + quote(spec) + `,"components":{` +
 		`"api":{"image":"r/protostrap/api:c-1","fingerprint":"f1"},` +
 		`"worker":{"image":"r/protostrap/worker:c-2","fingerprint":"f2"},` +
 		`"postgres":{"image":"r/protostrap/postgres:17.2","fingerprint":"f3"},` +
@@ -67,6 +70,9 @@ func TestAnEarlierReleaseHasNoTelemetry(t *testing.T) {
 	}
 	if r.Telemetry != (Component{}) {
 		t.Errorf("telemetry %+v, want none", r.Telemetry)
+	}
+	if s, err := r.ParseSpec(); err != nil || s.Upstream("api") == nil {
+		t.Errorf("its spec: %v, api's upstream %+v", err, s.Upstream("api"))
 	}
 }
 

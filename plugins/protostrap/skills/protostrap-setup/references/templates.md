@@ -1,6 +1,6 @@
 # Templates
 
-Replace `shop` with the spec's `app` and `v0.1.1` with the ProtoStrap version. Every input
+Replace `shop` with the spec's `app` and `v0.1.2` with the ProtoStrap version. Every input
 is in ProtoStrap's `infra/bootstrap/variables.tf`, `infra/platform/variables.tf` and
 `infra/people/main.tf` at that version; check them there before relying on these.
 
@@ -39,7 +39,7 @@ variable "github_repository" {
 }
 variable "cloudflare_account_id" { type = string }
 variable "cloudflare_zone" { type = string }
-variable "hosts" { type = map(string) } # each of the spec's hosts' hostname in this account
+variable "hosts" { type = map(string) } # each of the spec's gateway.hosts' hostname in this account
 variable "alert_emails" {
   type    = list(string)
   default = []
@@ -54,8 +54,8 @@ provider "github" {
 }
 
 module "bootstrap" {
-  # The same version as the spec's protostrap: and the workflows' @v0.1.1.
-  source = "github.com/duncan-G/protostrap//infra/bootstrap?ref=v0.1.1"
+  # The same version as the spec's protostrap: and the workflows' @v0.1.2.
+  source = "github.com/duncan-G/protostrap//infra/bootstrap?ref=v0.1.2"
 
   app               = "shop" # the spec's app; the secret is shop/<environment>
   environment       = var.environment
@@ -112,7 +112,7 @@ terraform {
 
 variable "cloudflare_account_id" { type = string }
 variable "cloudflare_zone" { type = string }
-variable "hosts" { type = map(string) } # each of the spec's hosts' hostname in this account
+variable "hosts" { type = map(string) } # each of the spec's gateway.hosts' hostname in this account
 variable "alert_emails" {
   type    = list(string)
   default = []
@@ -124,7 +124,7 @@ provider "aws" {
 provider "cloudflare" {}
 
 module "protostrap" {
-  source = "github.com/duncan-G/protostrap//infra/platform?ref=v0.1.1"
+  source = "github.com/duncan-G/protostrap//infra/platform?ref=v0.1.2"
 
   spec                  = file("${path.module}/../../protostrap.yaml")
   environment           = "prod"
@@ -137,12 +137,13 @@ module "protostrap" {
   log_retention_days    = 90
   backup_retention_days = 35
   snapshot_retention    = 14
-  client_rate_limit     = 300 # requests per client per 10 seconds; size it from real traffic
 }
 ```
 
 Other inputs worth knowing: `zones`, `vpc_cidr` (can't change later), `cors_origins`,
-`retired_components`, `retired_queues`, `retired_buckets`, `extra_egress`, `operator_hosts`.
+`retired_components`, `retired_queues`, `retired_buckets`, `extra_egress`, `operator_hosts`
+(only with the spec's `tunnel`). Cloudflare's rate limit, WAF rules and cache rules aren't
+inputs: they are the spec's `cdn` (protostrap-spec), which needs a tunnel.
 
 ## infra/people/main.tf
 
@@ -179,10 +180,10 @@ provider "aws" {
 }
 
 module "people" {
-  source = "github.com/duncan-G/protostrap//infra/people?ref=v0.1.1"
+  source = "github.com/duncan-G/protostrap//infra/people?ref=v0.1.2"
 
   # Developers see the account read-only, manage dev's secret, shop/dev, beside prod's, and
-  # open Grafana.
+  # open Grafana when the spec has telemetry.
   accounts = var.accounts
 }
 
@@ -228,28 +229,28 @@ jobs:
 
   plan:
     needs: approve
-    uses: duncan-G/protostrap/.github/workflows/plan.yml@v0.1.1
+    uses: duncan-G/protostrap/.github/workflows/plan.yml@v0.1.2
     with:
       environment: prod
       # apphost: src/Shop.AppHost/Shop.AppHost.csproj   # when an AppHost writes the spec
-      protostrap-ref: v0.1.1
+      protostrap-ref: v0.1.2
 
   infra:
     needs: plan
     if: needs.plan.outputs.infra-changed == 'true'
-    uses: duncan-G/protostrap/.github/workflows/infra.yml@v0.1.1
-    with: { environment: prod, directory: infra/prod, action: apply, protostrap-ref: v0.1.1 }
+    uses: duncan-G/protostrap/.github/workflows/infra.yml@v0.1.2
+    with: { environment: prod, directory: infra/prod, action: apply, protostrap-ref: v0.1.2 }
     secrets: inherit
 
   deploy:
     needs: [plan, infra]
     if: always() && needs.plan.result == 'success' && (needs.infra.result == 'success' || needs.infra.result == 'skipped')
-    uses: duncan-G/protostrap/.github/workflows/deploy.yml@v0.1.1
+    uses: duncan-G/protostrap/.github/workflows/deploy.yml@v0.1.2
     with:
       environment: prod
       version: ${{ needs.plan.outputs.version }}
       builds: ${{ needs.plan.outputs.builds }}
-      protostrap-ref: v0.1.1
+      protostrap-ref: v0.1.2
 ```
 
 The plan and deploy jobs run in the `prod` GitHub environment and infra in `prod-infra`, both
@@ -279,12 +280,12 @@ permissions:
 
 jobs:
   infra:
-    uses: duncan-G/protostrap/.github/workflows/infra.yml@v0.1.1
+    uses: duncan-G/protostrap/.github/workflows/infra.yml@v0.1.2
     with:
       environment: prod
       directory: infra/prod
       action: ${{ github.event_name == 'push' && 'apply' || inputs.action }}
-      protostrap-ref: v0.1.1
+      protostrap-ref: v0.1.2
     secrets: inherit
 ```
 
@@ -309,7 +310,7 @@ jobs:
       - uses: actions/checkout@v5
         with:
           repository: duncan-G/protostrap
-          ref: v0.1.1
+          ref: v0.1.2
           path: .protostrap
       - uses: ./.protostrap/.github/actions/protostrap   # builds the protostrap CLI
         with:

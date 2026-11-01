@@ -40,16 +40,19 @@ application and keep it sized to its load. How the VMs run on AWS is in
 | [Deploy workflow](#deploy-workflow) | Builds images and starts a release     | GitHub                       | —         |
 | [Scheduler](#scheduler)             | `protostrap scheduler`                 | data-1, the data VM          | Exactly 1 |
 | [Agent](#agent)                     | `protostrap agent`                     | Every VM                     | 1 per VM  |
-| [Edge](#edge)                       | cloudflared and Envoy in one container | Its zone's ingress VM           | 1 replica per zone |
+| [CDN](#cdn)                         | The application's rules at Cloudflare  | Cloudflare                   | 1, if the spec has `cdn` |
+| [Tunnel](#tunnel)                   | cloudflared, in the edge container     | Its zone's ingress VM        | In each edge, if the spec has `tunnel` |
+| [Gateway](#gateway)                 | Envoy, in the edge container           | Its zone's ingress VM        | 1 edge per zone, if the spec has `gateway` |
 | [Overlay network](#overlay-network) | Docker Swarm overlay                   | Every VM, manager on data-1  | 1         |
 | [Pools](#pools)                     | Auto Scaling groups, fixed instances   | AWS                          | 4         |
 | [Reporter](#reporter)               | `protostrap report`                    | data-1                       | Daily job |
 | [Operator UI](#operator-ui)         | A read-only page the scheduler serves  | data-1, on loopback          | 1         |
-| [Telemetry](#telemetry)             | A collector, Loki, Tempo, Prometheus and Grafana in one container | data-1        | 1 replica |
+| [Telemetry](#telemetry)             | A collector, Loki, Tempo, Prometheus and Grafana in one container | data-1        | 1 replica, if the spec has `telemetry` |
 
 The scheduler, agent and reporter are commands of one program, `protostrap`, which also
 has `check` (validate a spec), `deploy` (start a release) and `status` (show what runs
-where). One binary, one version, pinned in the spec.
+where). One binary, one version, pinned in the spec. The CDN, the tunnel, the gateway and
+telemetry are ProtoStrap's own components, and each runs only when the spec has its section.
 
 ```mermaid
 graph LR
@@ -107,8 +110,6 @@ release is a commit.
 ```yaml
 app: shop
 protostrap: 1.4.0
-hosts:
-  shop: shop.example.com
 
 pools:
   ingress: { vm: c8g.medium }
@@ -128,8 +129,22 @@ pools:
     reserved: { cpu: 400m, memory: 1Gi }
   data: { vm: m7g.xlarge, count: 1 }
 
-edge:
+cdn:
+  rate_limit: { requests: 300, period: 1m }
+  waf:
+    - { name: block-wp, paths: [/wp-admin/, /wp-login.php], action: block }
+  cache:
+    - { name: assets, hosts: [shop], paths: [/assets/], edge_ttl: 30d, browser_ttl: 1d }
+
+tunnel: {}
+
+gateway:
   request: { cpu: 500m, memory: 256Mi }
+  hosts:
+    shop: shop.example.com
+  upstreams:
+    api:
+      routes: [shop/api/]
 
 telemetry:
   retention: { logs: 30d, traces: 14d, metrics: 15d }
@@ -146,7 +161,6 @@ components:
     request: { cpu: 500m, memory: 512Mi }
     port: 8080
     ready: grpc
-    routes: [shop/api/]
     metrics: 9090/metrics
     depends_on: [postgres, redis]
     uses: [orders]
@@ -189,20 +203,31 @@ components:
     backup: [redis-cli, --rdb, "-"]
 ```
 
-**Pools.** The ingress pool is one VM of its `vm` type per zone, running only the edge and
-the zone's NAT. A scaling pool lists its VM types, all of one shape: sizing assumes the
-first, and the others give the Auto Scaling group more capacity to draw on. Compute runs on
-Spot, with On-Demand as a fallback. The data pool is a fixed `count` of VMs, `data-1` to
-`data-n`; one runs both PostgreSQL and Redis until they outgrow it. Why each pool runs as
-it does is in [VM types](vms.md#vm-types).
+**Pools.** The ingress pool is one VM of its `vm` type per zone, running only the zone's
+NAT and, with a gateway, the edge. A scaling pool lists its VM types, all of one shape:
+sizing assumes the first, and the others give the Auto Scaling group more capacity to draw
+on. Compute runs on Spot, with On-Demand as a fallback. The data pool is a fixed `count` of
+VMs, `data-1` to `data-n`; one runs both PostgreSQL and Redis until they outgrow it. Why
+each pool runs as it does is in [VM types](vms.md#vm-types).
 
-Each component has a kind: a **service** gets requests from the gateway, a **worker**
-takes jobs from a queue, a **stateful** component is pinned to a data VM with a volume, and
-a **task** runs to completion once per release, as another component's `migrate`. The edge
-isn't listed: ProtoStrap adds it, and only its request can be set. It must fit
-the ingress pool's VM. Nor is [telemetry](#telemetry), which ProtoStrap adds on data-1: its
-request, volume and retention can be set, and it must fit data-1 beside the stateful
-components there ([Settings](telemetry.md#settings)).
+Each component has a kind: a **service** answers requests, from the gateway when it is one
+of its [upstreams](#upstreams), a **worker** takes jobs from a queue, a **stateful**
+component is pinned to a data VM with a volume, and a **task** runs to completion once per
+release, as another component's `migrate`.
+
+ProtoStrap's own components aren't listed under `components`. Each has a section of its
+own, after `pools`, and runs only when the spec has it:
+
+| Section     | Runs                                                        | Settings                                                                 |
+| ----------- | ----------------------------------------------------------- | ------------------------------------------------------------------------ |
+| `cdn`       | The [CDN](#cdn), the application's own rules at Cloudflare  | `rate_limit`, `waf` and `cache`. It needs the tunnel                     |
+| `tunnel`    | The [tunnel](#tunnel), cloudflared, in each edge            | None: `tunnel: {}`. It needs a gateway                                   |
+| `gateway`   | The [gateway](#gateway), Envoy, in one edge per ingress VM  | `request`, which must fit the ingress pool's VM, [`hosts`](#hosts) and [`upstreams`](#upstreams) |
+| `telemetry` | [Telemetry](#telemetry), one replica on data-1              | `request`, `volume` and `retention`. It must fit data-1 beside the stateful components there ([Settings](telemetry.md#settings)) |
+
+A section with nothing after it, such as `tunnel:` alone, which YAML reads as nothing, is a
+mistake: `protostrap check` says to write `tunnel: {}`, which runs it with ProtoStrap's
+defaults, or to leave it out.
 
 | Field        | Kinds             | Meaning                                                                       |
 | ------------ | ----------------- | ----------------------------------------------------------------------------- |
@@ -216,10 +241,7 @@ components there ([Settings](telemetry.md#settings)).
 | `vm`         | stateful          | The data VM it is pinned to                                                   |
 | `request`    | all               | CPU and memory one replica reserves                                           |
 | `port`       | service, stateful | Port it listens on                                                            |
-| `protocol`   | service           | What the gateway speaks to it: `http1`, `http2` (cleartext HTTP/2), or `grpc`, which is HTTP/2 with browsers' gRPC-Web translated for it. It defaults to `grpc` with `ready: grpc`, otherwise `http1` |
 | `ready`      | service, worker, stateful | Its [readiness check](#readiness-checks), such as `/healthz`, `9000/health/ready`, `grpc` or a command. Services must have one |
-| `routes`     | service           | A [host](#hosts)'s name and a path prefix the gateway sends to it, such as `shop/api/`, each with an optional `rate`. A path alone, such as `/api/`, matches every host |
-| `authorize`  | service           | Another service the edge asks about each request to this one's routes first ([Authorizing requests](#authorizing-requests)) |
 | `metrics`    | all               | Port and path of a Prometheus endpoint, for `metric` signals and limits       |
 | `depends_on` | all               | Components that must have a ready replica before this one starts              |
 | `uses`       | all               | Queues it sends to, buckets it reads and writes, `files` or `backups` for those buckets, and `email` to send mail. Its [role](identity.md#component-roles) is built from these and its `queue` signal |
@@ -237,9 +259,10 @@ components there ([Settings](telemetry.md#settings)).
 | `backup`     | stateful          | Command whose output is the backup, run daily                                 |
 | `scale`      | service, worker   | `min`, `max`, `demand` and `limits`                                           |
 
-**Readiness checks.** `ready` is how ProtoStrap knows a replica can serve. A service must
-have one; a worker or stateful component may. Without one, a worker is ready once it runs,
-and a stateful component once its `port` accepts connections. `depends_on` waits for it.
+<a id="readiness-checks"></a>**Readiness checks.** `ready` is how ProtoStrap knows a replica
+can serve. A service must have one; a worker or stateful component may. Without one, a
+worker is ready once it runs, and a stateful component once its `port` accepts
+connections. `depends_on` waits for it.
 
 | `ready`                      | Passes when                                                            |
 | ---------------------------- | ---------------------------------------------------------------------- |
@@ -251,14 +274,14 @@ and a stateful component once its `port` accepts connections. `depends_on` waits
 
 - **A check names its component,** as the HTTP request's `Host` or the gRPC service, so an
   address reused by another service never passes ([Reused addresses](network.md#reused-addresses)).
-- **On its own `port`, a check speaks the component's `protocol`.** On another port, it
-  speaks HTTP/1.1, or cleartext HTTP/2 for gRPC. The edge checks gRPC over its HTTP/2
-  connections to a service, so a routed service with a gRPC check, on any port, needs
-  protocol `http2` or `grpc`.
-- **The edge runs a routed service's check too,** to send requests only to ready replicas,
-  so a service with `routes` can't use a command.
+- **On its own `port`, a check speaks the service's protocol:** its
+  [upstream](#upstreams)'s `protocol`, or the default. On another port, it speaks HTTP/1.1,
+  or cleartext HTTP/2 for gRPC. The gateway checks gRPC over its HTTP/2 connections to a
+  service, so an upstream with a gRPC check, on any port, needs protocol `http2` or `grpc`.
+- **The gateway runs an upstream's check too,** to send requests only to ready replicas,
+  so a service in `gateway.upstreams` can't use a command.
 - **A worker has no `port`,** so its HTTP, gRPC or TCP check names one, such as `8081/healthz`.
-- **Once ready, a replica failing its check** only stops getting requests from the edge. It
+- **Once ready, a replica failing its check** only stops getting requests from the gateway. It
   isn't replaced, since being ready includes reaching what it depends on, and a database's
   blip would otherwise replace every replica.
 
@@ -280,8 +303,9 @@ buckets:
 - **Every bucket** is private, encrypted with S3's own keys, refuses plain HTTP, and drops
   uploads abandoned part way after 7 days. A replica finds each bucket's name in
   `BUCKET_<NAME>`.
-- **`browser`** lets browsers on the hosts, and the account's `cors_origins`, upload and
-  download with signed URLs, as they can with `files`.
+- **`browser`** lets browsers on the [hosts](#hosts), and the account's `cors_origins`,
+  upload and download with signed URLs, as they can with `files`. Its CORS rule allows the
+  hosts' origins, so it needs `gateway.hosts`.
 - **`versions`** turns versioning on, and keeps a replaced or deleted object's earlier
   version that long. Components can't delete an earlier version, so that's how long a bad
   write or delete can be undone.
@@ -305,62 +329,98 @@ email:
   domains: [shop.example.com]
 ```
 
-**Hosts.** `hosts` names each host the application answers on, with its hostname:
+<a id="upstreams"></a>**Upstreams.** The gateway sends requests only to the services listed
+under `gateway.upstreams`, each by its component's name, with the routes it sends there:
 
 ```yaml
-hosts:
-  app: protofast.dev
-  admin: admin.protofast.dev
-  auth: auth.protofast.dev
+gateway:
+  request: { cpu: 500m, memory: 256Mi }
+  hosts:
+    shop: shop.example.com
+  upstreams:
+    api:
+      protocol: grpc
+      routes: [shop/api/, { route: /v2/, rate: 200/s }]
+      authorize: { by: auth, path: /auth/check, headers: [x-user], forward: [cookie] }
+```
+
+| Field       | Meaning                                                                                  |
+| ----------- | ---------------------------------------------------------------------------------------- |
+| `routes`    | Required. A [host](#hosts)'s name and a path prefix the gateway sends to it, such as `shop/api/`, each with an optional `rate`. A path alone, such as `/v2/`, matches every host |
+| `protocol`  | What the gateway speaks to it: `http1`, `http2` (cleartext HTTP/2), or `grpc`, which is HTTP/2 with browsers' gRPC-Web translated for it. It defaults to `grpc` with `ready: grpc`, otherwise `http1` |
+| `authorize` | Another service the gateway asks about each request to these routes first ([Authorizing requests](#authorizing-requests)) |
+
+- **An upstream is a service,** a component of kind `service`, with at least one route. A
+  route goes to one upstream only.
+- **A service that isn't an upstream** gets no requests through the gateway. Other
+  components still call it on the overlay, and the gateway may still ask it to authorize
+  requests.
+- **The gateway's `request`** is what its container reserves, the tunnel's cloudflared
+  included: 500m and 256Mi unless set. It must fit the ingress pool's VM after its reserve.
+
+<a id="hosts"></a>**Hosts.** `gateway.hosts` names each host the application answers on,
+with its hostname:
+
+```yaml
+gateway:
+  hosts:
+    app: protofast.dev
+    admin: admin.protofast.dev
+    auth: auth.protofast.dev
 ```
 
 - **Every hostname is the application's.** ProtoStrap never makes one up. Each comes from
   the spec, from an account's Terraform config, or, under `aspire run`, from the AppHost.
-- **The rest of the spec refers to a host by its name,** so it means the same in every
-  account. A route `admin/` sends `/` on the admin host to its component, whatever the admin
-  host is called in that account. A path alone, such as `/api/`, still matches every host.
-  Names are lowercase letters, digits and dashes, so a route's host part never has a dot.
+- **Routes refer to a host by its name,** so a route means the same in every account. A
+  route `admin/` sends `/` on the admin host to its upstream, whatever the admin host is
+  called in that account. A path alone, such as `/api/`, still matches every host. Names
+  are lowercase letters, digits and dashes, so a route's host part never has a dot.
+- **Without a gateway there are no hosts,** so no replica gets `HOST_<NAME>` or
+  `ORIGIN_<NAME>`, and no bucket can have `browser`.
 - **An account's Terraform config can give the names other hostnames,** such as a staging
   account's `admin = "admin.staging.protofast.dev"`. It then maps every name the spec has,
   and only those, and Terraform refuses a map that doesn't. A name it left out would fall
   back to the spec's hostname, which another account already serves.
 - **An account's hostnames reach** the tunnel and its DNS records, the CORS origins of the
-  buckets browsers use, Cloudflare's rate limit, the edge's virtual hosts, and every replica,
-  as `HOST_<NAME>`, such as `HOST_ADMIN=admin.staging.protofast.dev`, and `ORIGIN_<NAME>`,
-  the scheme and host browsers use, such as `ORIGIN_ADMIN=https://admin.staging.protofast.dev`.
-  Those are for the redirect URLs, cookie domains and allowed origins an application builds
-  from its own hostnames, so none is written into its code or config. `<NAME>` is the
+  buckets browsers use, the [CDN](#cdn)'s rules, the gateway's virtual hosts, and every
+  replica, as `HOST_<NAME>`, such as `HOST_ADMIN=admin.staging.protofast.dev`, and
+  `ORIGIN_<NAME>`, the scheme and host browsers use, such as
+  `ORIGIN_ADMIN=https://admin.staging.protofast.dev`. Those are for the redirect URLs, cookie
+  domains and allowed origins an application builds from its own hostnames, so none is
+  written into its code or config, and a component's `env` can't set them. `<NAME>` is the
   name in upper case with `-` as `_`.
 - **Terraform hands them to the scheduler** as `hosts.json` in the deploy bucket, which the
-  scheduler reads again every minute. A changed hostname reloads the edge's routes and
+  scheduler reads again every minute. A changed hostname reloads the gateway's routes and
   replaces every replica, a quarter at a time, since its `HOST_<NAME>` changed, and runs
   every configure task again. If `hosts.json` can't be read, the hostnames last read stay.
 - **Under `aspire run`,** the AppHost gives each name its local hostname, such as
-  `admin.dev.localhost` (`WithHost("admin", "admin.protofast.dev", local:
+  `admin.dev.localhost` (`gateway.WithHost("admin", "admin.protofast.dev", local:
   "admin.dev.localhost")`), every resource gets `HOST_<NAME>` and `ORIGIN_<NAME>` for it,
   and the local gateway serves it there. Locally the origin is `http://`, with the gateway's
   port.
 
-<a id="authorizing-requests"></a>**Authorizing requests.** A service's routes can be authorized
-by another service, which the edge asks about each request before sending it on, such as a
-sign-in service that knows each session:
+<a id="authorizing-requests"></a>**Authorizing requests.** An upstream's routes can be
+authorized by another service, which the gateway asks about each request before sending it
+on, such as a sign-in service that knows each session:
 
 ```yaml
-  api:
-    routes: [app/api/]
-    authorize: { by: auth, path: /auth/check, headers: [x-user], forward: [cookie], respond: [set-cookie] }
+gateway:
+  upstreams:
+    api:
+      routes: [app/api/]
+      authorize: { by: auth, path: /auth/check, headers: [x-user], forward: [cookie], respond: [set-cookie] }
 ```
 
 A client whose static files anyone can fetch, and whose pages are served anonymously while
 `auth` can't answer, is authorized like this:
 
 ```yaml
-  clients:
-    routes: [admin/]
-    authorize: { by: auth, headers: [x-user], forward: [cookie], open: true, timeout: 500ms, skip: [/assets/, "*.js", "*.css"] }
+    clients:
+      routes: [admin/]
+      authorize: { by: auth, headers: [x-user], forward: [cookie], open: true, timeout: 500ms, skip: [/assets/, "*.js", "*.css"] }
 ```
 
-- **The edge asks `by`** on its port, at `path` followed by the request's own path, with
+- **The gateway asks `by`** on its port, at `path` followed by the request's own path, with
   the request's method and headers but not its body: `Authorization` always, and the
   headers in `forward`. `path` defaults to none, so the authorizer is asked for the
   request's own path.
@@ -368,7 +428,7 @@ A client whose static files anyone can fetch, and whose pages are served anonymo
   `headers` added to it. Anything else is the client's response, status, headers and body,
   so the authorizer can answer 401, or redirect to a sign-in page. That includes every
   other 2xx: a 204 reaches the client as a 204, and the service never sees the request.
-- **The service can trust `headers`:** the edge removes the client's own copies of them
+- **The service can trust `headers`:** the gateway removes the client's own copies of them
   before it asks, so only the authorizer's arrive. A request the authorizer lets through
   without them arrives without them.
 - **A 200 can answer the client too,** with the authorizer's response headers named in
@@ -376,9 +436,9 @@ A client whose static files anyone can fetch, and whose pages are served anonymo
   renewed. Each is a header of its own, after the service's: two cookies stay two, and of
   a cookie both set, the browser keeps the authorizer's. No other header of a 200 reaches
   the client. `respond` can't name `content-length` or a header of one connection, such as
-  `connection` or `transfer-encoding`: the edge sets those itself.
+  `connection` or `transfer-encoding`: the gateway sets those itself.
 - **An authorizer that can't answer** gets the client a 503: one with no ready replica, one
-  the edge can't connect to, one that answers a 5xx, and one that doesn't answer within
+  the gateway can't connect to, one that answers a 5xx, and one that doesn't answer within
   `timeout`. `timeout` is 2 seconds unless set, such as `500ms`, and at most 5: the
   service's 120 seconds start once the authorizer answers, and Cloudflare gives up at 125.
 - **`open: true` sends those requests on instead,** without the authorizer's `headers`, as
@@ -396,26 +456,30 @@ A client whose static files anyone can fetch, and whose pages are served anonymo
   and `/theplot/x.js` reaches `console`, asked. A prefix under another service's longer
   route, such as `/theplot/assets/` for `clients`, is never skipped.
 - **Nothing else goes through unasked.**
-- **The authorizer is asked about the path the request takes.** The edge normalises each
-  path before it routes it ([Edge](#edge)), so `/theplot/../x` and `/theplot/%2e%2e/x` take
-  the route for `/x`, and are asked about and sent on as `/x`.
-- **Only the routes of the service that names it** are authorized. The authorizer's own
-  routes, such as its sign-in pages, aren't, unless it names another. It needs no routes
-  to be asked.
-- **It changes the edge, not the replicas:** a new `authorize` reloads the edge's routes.
-- Services that call each other on the overlay aren't asked: the edge authorizes only what
-  comes in from the internet.
+- **The authorizer is asked about the path the request takes.** The gateway normalises each
+  path before it routes it ([Gateway](#gateway)), so `/theplot/../x` and `/theplot/%2e%2e/x`
+  take the route for `/x`, and are asked about and sent on as `/x`.
+- **The authorizer is a service, and needn't be an upstream:** the gateway asks it on its
+  own, so it needs no routes to be asked. A service can't authorize its own requests.
+- **Only the routes of the upstream that names it** are authorized. The authorizer's own
+  routes, if it is an upstream too, such as for its sign-in pages, aren't, unless its own
+  upstream names another.
+- **It changes the gateway, not the replicas:** a new `authorize` reloads the gateway's
+  routes.
+- Services that call each other on the overlay aren't asked: the gateway authorizes only
+  the requests it routes.
 
 **Demand signals.** A component lists one or more; its demand is the highest of them.
 
 | Signal                                 | Measured by                            | Demand                                   |
 | -------------------------------------- | -------------------------------------- | ---------------------------------------- |
 | `cpu: 70%`                             | Agents, from Docker                    | ceil(ready replicas × average CPU ÷ 70%) |
-| `requests: 50/s`                       | The edge's Envoy, scraped by its agent | ceil(requests per second ÷ 50)           |
+| `requests: 50/s`                       | The gateway's Envoy, scraped by its agent | ceil(requests per second ÷ 50)        |
 | `queue: orders, rate: 2/s, drain: 60s` | The scheduler, from SQS                | ceil((waiting + in flight) ÷ (2 × 60))   |
 | `metric: <name>, target: n`            | Replicas' endpoints, scraped by agents | ceil(ready replicas × average ÷ n)       |
 
-CPU is measured as a share of the replica's request.
+CPU is measured as a share of the replica's request. Requests are counted by the gateway,
+so only a service in `gateway.upstreams` can scale on them.
 
 **Limits.** Each limit is a replica cap; the lowest one applies.
 
@@ -431,10 +495,20 @@ exports `llm_budget_cap` from the same Redis counter the workers write.
 `protostrap check` runs in both workflows. It rejects a spec in which a request doesn't fit
 one VM of its pool after the reserve, the stateful components pinned to one data VM don't
 fit it together, two routes match the same host and path, a `depends_on`, `uses` or `vm`
-names something that doesn't exist, a bucket or an email domain breaks the rules above or
-in [Email](email.md), `config` or `configure` breaks the rules in
-[Config files](config.md), or `depends_on` forms a cycle, counting the configure tasks of
-what a component depends on.
+names something that doesn't exist, the tunnel has no gateway to send requests to, the CDN
+has no tunnel to be in front of, an upstream, a route, a readiness check, a `requests`
+signal or a bucket breaks the rules above, the CDN's rate limit or a rule breaks those in
+[CDN](#cdn), an email domain breaks those in [Email](email.md), `config` or `configure` breaks
+the rules in [Config files](config.md), or `depends_on` forms a cycle, counting the
+configure tasks of what a component depends on.
+
+**A spec written for ProtoStrap 0.1,** with `hosts` and `edge` at the top and `routes`,
+`protocol` and `authorize` on its services, still loads, as the same spec in the new places,
+with the tunnel and telemetry on as they always ran, so a newer scheduler can load the
+releases it finds running. `protostrap check` rejects it, naming each field and where it
+moved, such as `hosts: moved to gateway.hosts` and
+`components.api.routes: moved to gateway.upstreams.api.routes`. A spec with both the old
+places and the new isn't read at all.
 
 ### Infra workflow
 
@@ -466,16 +540,23 @@ what a component depends on.
   - **Per email domain**, an SES identity with DKIM and a MAIL FROM domain, and its DNS
     records in Cloudflare ([Email](email.md#what-protostrap-creates)).
   - **Per component**, and for the edge and telemetry, a
-    [role](identity.md#component-roles), and a log group, which only replicas started
-    before [telemetry](telemetry.md#upgrading) write to.
-  - **For telemetry**, its EBS volume on data-1, the telemetry bucket, and the
-    `protostrap-telemetry` SSM document that forwards Grafana's port.
+    [role](identity.md#component-roles), and a log group, which Docker sends replicas'
+    output to when the spec has no [telemetry](telemetry.md#without-telemetry), as it did
+    for replicas started before [telemetry](telemetry.md#upgrading).
+  - **For telemetry**, the telemetry bucket and its repository, and, while the spec has
+    `telemetry`, its EBS volume on data-1, the `protostrap-telemetry` SSM document that
+    forwards Grafana's port, and the port Docker sends replicas' output to.
   - **Per environment**, one empty [secret](secrets.md), `<app>/<environment>`.
-  - **Per host**, a Cloudflare DNS record pointing at the tunnel. The tunnel sends every
-    host to Envoy.
+  - **With a tunnel**, the tunnel, and per host a Cloudflare DNS record pointing at it. The
+    tunnel sends every host to the gateway's Envoy.
+  - **With a CDN**, the zone's WAF rules, cache rules and rate limit, each only when the
+    `cdn` has some of its kind ([CDN](#cdn)).
 - **Creates once:** the [network](network.md), the files and backups buckets, the deploy
-  bucket's lifecycle rules, the tunnel, the `protostrap-deploy` SSM document, and the VMs'
-  roles.
+  bucket's lifecycle rules, the `protostrap-deploy` SSM document, and the VMs' roles.
+- **Makes whether or not the spec has them** the edge's repository, log group and role, and
+  telemetry's bucket, role and repository, as it keeps a retired component's: they cost
+  little, and removing `gateway` or `telemetry` never fails on a bucket or repository that
+  isn't empty. The telemetry bucket's lifecycle rule still expires its logs and traces.
 - **Never touches:** replicas or VM counts.
 
 ### Deploy workflow
@@ -490,10 +571,12 @@ what a component depends on.
      SDK's container publish. A project's SDK is the one its `global.json` pins, and a
      project without one is refused: ProtoStrap never picks a .NET version, so a new one
      needs no new ProtoStrap.
-  3. Copy the `protostrap` binary, and the edge and telemetry images of the spec's version,
-     and every stateful component's upstream `image`, into the deploy bucket and ECR, if
-     they aren't there yet. The infra workflow has usually put the binary there already.
-     VMs never pull from Docker Hub.
+  3. Copy the `protostrap` binary, the edge image of the spec's version if the spec has a
+     gateway, the telemetry image if it has telemetry, and every stateful component's
+     upstream `image`, into the deploy bucket and ECR, if they aren't there yet. `protostrap
+     plan --json` names the edge and telemetry images, or leaves each empty when the spec
+     doesn't run it. The infra workflow has usually put the binary there already. VMs never
+     pull from Docker Hub.
   4. Write the release, `releases/<commit>.json` in the deploy bucket: the spec and every
      component's image tag.
   5. Send `protostrap-deploy <commit>` to data-1 through SSM, and wait for its result.
@@ -524,7 +607,8 @@ what a component depends on.
   Admins and `127.0.0.1:7481` for Org Admins, which they reach through an SSM port forward (see
   [Operator UI](#operator-ui)).
 - **Grafana:** the telemetry replica's Grafana, from its socket, on `127.0.0.1:7482`, for
-  Developers and admins' own SSM port forward (see [Telemetry](#telemetry)).
+  Developers and admins' own SSM port forward, when the spec has telemetry (see
+  [Telemetry](#telemetry)).
 - **Infra log:** its own records and the agents', the last day in memory and every hour in
   the deploy bucket (see [Infra log](#infra-log)).
 - **Cycle, every 10 seconds:**
@@ -588,9 +672,9 @@ what a component depends on.
   | Network     | Overlay `protostrap`, with the component's name as its DNS alias               |
   | Memory      | A hard limit at the request                                                    |
   | CPU         | A share in proportion to the request, not a cap, so idle CPU gets used. A stateful component gets cores of its own instead (see [Sharing the VM](vms.md#sharing-the-vm)) |
-  | Environment | The spec's `env` plus [ProtoStrap's variables](#application-contract), and the `OTEL_` variables the `env` doesn't set |
+  | Environment | The spec's `env` plus [ProtoStrap's variables](#application-contract), and, with telemetry, the `OTEL_` variables the `env` doesn't set |
   | Credentials | Its component role's, served by the agent at `169.254.170.2` (see [How replicas get credentials](identity.md#how-replicas-get-credentials)) |
-  | Logs        | Docker's `fluentd` driver, to the [telemetry](#telemetry) collector at data-1's fixed address, port 24224, labelled with the component and replica. The telemetry replica keeps its own output on data-1 |
+  | Logs        | Docker's `fluentd` driver, to the [telemetry](#telemetry) collector at data-1's fixed address, port 24224, labelled with the component and replica. The telemetry replica keeps its own output on data-1. Without telemetry, Docker's `awslogs` driver, to its component's log group in CloudWatch Logs (see [Without telemetry](telemetry.md#without-telemetry)) |
   | Restarts    | Docker restarts a crashed replica, even if the agent is down. Never a task     |
   | Volume      | Stateful and telemetry only: its own EBS volume, at `/data/<component>` on the VM, mounted at `volume` |
   | Secret files | With `secret_files`: its keys, read with its role and written to tmpfs, mounted read-only at `/run/secrets` (see [Secret files](secrets.md#secret-files)) |
@@ -608,32 +692,133 @@ what a component depends on.
   they lose AWS access within the hour. See [Lose a VM](#lose-a-vm) for what the scheduler
   does about a silent agent.
 
-### Edge
+### CDN
 
-- **Job:** bring every request from Cloudflare to a ready replica of the right service.
-- **Is:** one container from the `protostrap/edge` image, holding cloudflared and Envoy, so
-  the pair is always placed, started and stopped together. One replica per zone, alone
-  on that zone's ingress VM. It only scales up, through `edge.request` in the spec, within
-  the ingress VM's size.
-- **cloudflared** runs the tunnel, with the token `Edge_TUNNEL_TOKEN` from the
-  environment's secret, and sends every request to Envoy in the same container, on
-  `127.0.0.1`. The tunnel's and Cloudflare's settings are in
-  [Requests in](network.md#requests-in).
+- **Job:** filter and cache the application's requests at Cloudflare, before they reach the
+  tunnel, with the application's own WAF rules, cache rules and rate limit per client.
+- **Is:** Cloudflare, in front of the [tunnel](#tunnel), with rules Terraform makes in the
+  application's zone. Nothing runs on a VM for it. It runs when the spec has `cdn`, and
+  needs the tunnel: `protostrap check` says to add `tunnel: {}`. `cdn: {}` runs Cloudflare
+  with ProtoStrap's settings alone.
+- **ProtoStrap's settings stay its own.** Always Use HTTPS and a minimum of TLS 1.2, for
+  the whole zone, are fixed in Terraform, and Cloudflare Access for operator UIs comes from
+  the account's `operator_hosts` ([Operator UIs](network.md#operator-uis)). `cdn` adds to
+  them and changes neither.
+
+```yaml
+cdn:
+  rate_limit: { requests: 300, period: 1m }
+  waf:
+    - { name: block-wp, paths: [/wp-admin/, /wp-login.php], action: block }
+    - { name: admin-abroad, hosts: [admin], not_countries: [US, CA], methods: [POST], action: managed_challenge }
+    - { name: office, ips: [203.0.113.0/24, "2001:db8::/32"], action: skip }
+    - { name: bots, not_ips: [198.51.100.7], expression: 'http.user_agent contains "sqlmap"', action: js_challenge }
+  cache:
+    - { name: assets, hosts: [app], paths: [/assets/], extensions: [js, css], edge_ttl: 30d, browser_ttl: 1d }
+    - { name: api, paths: [/api/], cache: false }
+    - { name: pages, hosts: [app] }
+```
+
+- **`rate_limit`** blocks a client that sends more than `requests` in `period`, for as long
+  as the period. A client is an IP address, counted at each Cloudflare data centre apart.
+  `period` is `10s` unless set, or `1m`, `2m`, `5m`, `10m` or `1h`. It is a broad limit: the
+  gateway applies each route's own `rate` ([Upstreams](#upstreams)).
+- **`waf`** rules run in order, and the first that matches acts with its `action`:
+  `block`, `managed_challenge`, `js_challenge`, `challenge`, or `skip`, which lets the
+  request past the remaining WAF rules and the rate limit, such as a trusted office's.
+- **`cache`** rules make the responses they match eligible for Cloudflare's cache, for the
+  origin's TTLs, or for `edge_ttl` at Cloudflare and `browser_ttl` in browsers over the
+  origin's headers, in whole seconds and at least `1s`. `cache: false` bypasses the cache
+  instead, and takes no TTLs. Every rule that matches applies, a later one over an earlier.
+  Without one, Cloudflare caches what it does by default: static files, by their extension.
+
+A rule matches with these fields, each optional but `name`:
+
+| Field                        | Matches                                                                              |
+| ---------------------------- | ------------------------------------------------------------------------------------ |
+| `name`                       | Required. Lowercase letters, digits and dashes, unique within its list               |
+| `hosts`                      | [Hosts](#hosts), by their names in `gateway.hosts`, never hostnames. Without it, every host the tunnel serves, operator hosts included |
+| `paths`                      | Path prefixes, each starting with `/`, such as `/admin/`                             |
+| `extensions`                 | The path's file extension, without the dot: up to 10 lower-case letters and digits, such as `js` |
+| `methods`                    | HTTP methods in upper case: `GET`, `HEAD`, `POST`, `PUT`, `PATCH`, `DELETE`, `OPTIONS` |
+| `countries`, `not_countries` | The client's country, or the countries it isn't in, as two-letter codes, such as `US` |
+| `ips`, `not_ips`             | The client's address, or the addresses it isn't, as addresses or ranges, such as `203.0.113.0/24` |
+| `expression`                 | Cloudflare's rules language, for what the fields can't say. `protostrap check` can't check it; Cloudflare refuses a bad one when Terraform applies |
+
+- **Every field set must match,** and within a field, any value. `expression` must match
+  too.
+- **A WAF rule has an `action`,** and no `cache`, `edge_ttl` or `browser_ttl`, which go in a
+  cache rule. A cache rule has no `action`.
+- **A rule touches only the application's hosts.** Cloudflare has one ruleset per zone for
+  each kind of rule, so every rule also matches only the hostnames this account gives the
+  hosts it names, from the platform root's `hosts`, or else every host the tunnel serves.
+  Other hosts in the zone never meet it.
+- **ProtoStrap owns the zone's rulesets of each kind it makes.** A zone's custom rules, cache
+  rules and rate limit rules are each one ruleset, so with a `cdn` rule of a kind, the
+  platform root makes that ruleset and holds all of it. Move any rule made by hand in the
+  Cloudflare dashboard into the spec first, or the apply conflicts with it or replaces it,
+  and give each application with `cdn` rules a zone of its own.
+- **The Cloudflare plan decides what it takes.** How many rules a zone can have, and which
+  rate limit periods, depend on its plan: the free plan allows few custom rules and only
+  the 10-second period. Cloudflare refuses what the plan can't take when Terraform applies.
+- **The infra workflow's Cloudflare token** needs Zone WAF Edit for WAF rules and the rate
+  limit, and Cache Rules Edit for cache rules
+  ([What you need](../sample/README.md#what-you-need)).
+- **It is all infrastructure.** Terraform makes every rule, so any change to `cdn` changes
+  the infra hash, and the infra workflow applies it
+  ([Infrastructure projection](protostrap-aspire.md#infrastructure-projection)). Nothing
+  is deployed to a VM for it, and no replica restarts.
+- **Under `aspire run`,** neither the CDN nor the tunnel runs: requests reach the local
+  gateway directly.
+- **Without it,** Cloudflare runs with ProtoStrap's settings alone, and caches as it does by
+  default. Terraform makes no WAF rules, cache rules or rate limit.
+
+### Tunnel
+
+- **Job:** bring the requests for the gateway's hosts in from Cloudflare, so no VM accepts
+  a connection from the internet.
+- **Is:** cloudflared, beside the gateway's Envoy in the [edge](#edge), so it runs on each
+  zone's ingress VM, and is placed, started and stopped with the gateway. It runs when the
+  spec has `tunnel: {}`, which has no settings, and needs the gateway: it sends every
+  request there. The gateway's `request` covers it.
+- **Runs the tunnel** with the token `Edge_TUNNEL_TOKEN` from the environment's secret, and
+  sends every request to Envoy in the same container, on `127.0.0.1`. The tunnel's and
+  Cloudflare's settings are in [Requests in](network.md#requests-in).
+- **Without it,** nothing reaches the gateway from the internet. Terraform makes no
+  Cloudflare tunnel or DNS records, and the ingress VMs don't open the tunnel's port out.
+  The edge runs Envoy alone: the scheduler sets `EDGE_TUNNEL=off` on it, so it reads no
+  keys, and a new `Edge_TUNNEL_TOKEN` doesn't replace it. Operator UIs come in through the
+  tunnel, so an account with `operator_hosts` needs one, and so does a spec with a
+  [CDN](#cdn).
+- **Adding or removing it** replaces the edge, beside the old one.
+
+### Gateway
+
+- **Job:** bring every request from the tunnel to a ready replica of the right service.
+- <a id="edge"></a>**Is:** Envoy, in one container from the `protostrap/edge` image with the
+  tunnel's cloudflared, when the spec has a tunnel, so the pair is always placed, started
+  and stopped together. The container is the **edge**: one replica per zone, alone on that
+  zone's ingress VM. It runs when the spec has `gateway`, and only scales up, through
+  `gateway.request`, within the ingress VM's size.
+- **Without it,** no edge runs, and the ingress VMs run only their zone's NAT. The
+  application has no hosts, so no replica gets `HOST_<NAME>` or `ORIGIN_<NAME>`, and its
+  services are reached only on the overlay.
 - **Envoy:**
   - normalises each request's path as RFC 3986 does, `/a/../b` to `/b` and `%2e` to `.`,
     and merges `//` into `/`, so a route, its authorizer and its service all see one path.
     A path with `%2F` or `%5C` gets a 307 to the same path with `/` in its place;
-  - matches each request's host and path to a service, from the spec's `routes`;
+  - matches each request's host and path to an upstream, from the routes in
+    `gateway.upstreams`;
   - asks a route's [authorizer](#authorizing-requests) about the request first;
   - finds a service's replicas by looking up its name on the overlay every 5 seconds;
   - sends requests only to replicas that pass their `ready` check, on whichever port it names, and balances each
     request, not each connection, so gRPC spreads across replicas;
   - retries a request that never reached a replica (connection or stream refused), which
     covers a replica that has just stopped;
-  - translates browsers' gRPC-Web on routes to `grpc` services only, so any other service,
+  - translates browsers' gRPC-Web on routes to `grpc` upstreams only, so any other service,
     such as an application's own gateway, gets it as it was sent;
   - applies each route's `rate`;
-  - counts requests per service, which its agent scrapes for `requests` signals.
+  - counts requests per upstream, which its agent scrapes for `requests` signals.
 - **Routes** are a file the agent writes from the assignment. Envoy reloads it without
   restarting, so a route change never restarts the edge.
 - **Upgrading it** follows the replica rule: the new edge starts beside the old one on the
@@ -680,7 +865,9 @@ what a component depends on.
 - **Runs:** on data-1, once a day and after every release finishes.
 - **Reads:** the last day of the [infra log](#infra-log) from the deploy bucket: the
   scheduler's decisions and signal snapshots, and the agents' warnings and errors. From
-  [telemetry](#telemetry)'s Loki, through Grafana's socket, every component's errors.
+  [telemetry](#telemetry)'s Loki, through Grafana's socket, every component's errors, or,
+  when the running release has no telemetry, from the components' log groups in CloudWatch
+  Logs, with a Logs Insights query.
 - **Writes:** a report, written by an LLM, to `reports/<date>.md` in the deploy bucket,
   followed by the facts it was written from: releases, each component's replica range,
   time at its maximum, CPU and requests, waiting replicas, failures, VM events, the
@@ -762,15 +949,16 @@ what a component depends on.
   OpenTelemetry collector, Loki for logs, Tempo for traces, Prometheus for metrics and
   Grafana, run by `protostrap telemetry`, as the edge's two programs are. One replica,
   pinned to data-1, with its own EBS volume, so like a stateful component it stops before
-  its replacement starts.
+  its replacement starts. It runs when the spec has `telemetry`, with ProtoStrap's defaults
+  for `telemetry: {}`.
 - **Takes in:**
   - every replica's stdout, which Docker on each VM sends to data-1's fixed address, port
     24224;
   - OTLP from services, at `telemetry:4318` (HTTP) and `telemetry:4317` (gRPC) on the
     overlay;
-  - each component's `metrics` endpoint and the edge's request counts, which Prometheus
-    scrapes from every replica, found by name, every 30 seconds. The scheduler sends the
-    list as a file in the assignment, as it sends the edge's routes.
+  - each component's `metrics` endpoint and, with a gateway, the edge's request counts,
+    which Prometheus scrapes from every replica, found by name, every 30 seconds. The
+    scheduler sends the list as a file in the assignment, as it sends the edge's routes.
 - **Keeps:** logs and traces in the telemetry bucket, metrics on its volume, for the spec's
   `telemetry.retention`.
 - **Read:** through Grafana, which listens only on a socket in `/run/protostrap/telemetry`
@@ -781,14 +969,18 @@ what a component depends on.
   replica's own output stays on data-1.
 - **If it stops:** services carry on, Docker holds each replica's latest lines and keeps
   them on its VM, and Grafana and the reporter's errors wait for it.
+- **Without it,** no telemetry replica runs, replicas get no `OTEL_` variables, and Docker
+  sends each replica's output to its component's log group in CloudWatch Logs, where the
+  reporter reads their errors. Adding or removing it replaces every replica, so each sends
+  its output to the new place ([Without telemetry](telemetry.md#without-telemetry)).
 
 ### Infra log
 
 - **Job:** keep ProtoStrap's own records, apart from the services' logs: the scheduler's
   decisions with their reasons and its signal snapshots, and every agent's records of its
   VM and of the replicas it starts, stops and backs up. A service's own output goes to
-  [telemetry](#telemetry), which Developers can read; the infra log is for Platform Admins
-  and Org Admins only.
+  [telemetry](#telemetry), which Developers can read, or, without it, to CloudWatch Logs;
+  the infra log is for Platform Admins and Org Admins only.
 - **From the agents:** each agent holds its records, info and above, until a sync carries
   them, at most 500 at a time. While the scheduler is unreachable it keeps the newest
   5,000, and says how many it dropped. The VM's journal still has every record. The
@@ -890,7 +1082,7 @@ is never restarted.
 | STS             | —                            | Assume component roles            | —                     | —                          | —                |
 | Auto Scaling    | Add, remove and replace VMs  | Complete lifecycle hooks          | —                     | —                          | —                |
 | SSM             | Runs the deploy command      | —                                 | —                     | Send the deploy command    | —                |
-| CloudWatch Logs | —                            | Docker ships the output of replicas started before telemetry | — | —           | —                |
+| CloudWatch Logs | —                            | Docker ships replicas' output without telemetry, and that of replicas started before it | — | — | Read components' errors without telemetry |
 
 Each column is a role in [Identity](identity.md): the scheduler and the reporter use the
 data VM's role, the agent its VM's role, replicas their component's role, and the deploy
@@ -1044,7 +1236,7 @@ ProtoStrap can run any container that:
 
 1. **Listens on its `port`** and answers its readiness check, if it is a service, only when
    asked for its own service by name. An HTTP check passes on a 2xx or 3xx answer, for the
-   agent and the edge alike; `grpc` passes on `SERVING`.
+   agent and the gateway alike; `grpc` passes on `SERVING`.
 2. **Stops cleanly.** On SIGTERM it fails its readiness check, stops taking new requests or
    jobs, finishes what it has within `stop`, and exits. A worker sets the visibility of
    jobs it won't finish to 0, so another replica picks them up at once. On a Spot
@@ -1057,8 +1249,8 @@ ProtoStrap can run any container that:
    the scheduler's state.
 4. **Gets connection details from its keys**, such as `postgres:5432`, so moving a
    component to a managed service only changes the secret.
-5. **Writes its logs to stdout.** It may also send logs, traces and metrics with
-   OpenTelemetry, to the collector its `OTEL_` variables name ([Telemetry](telemetry.md)).
+5. **Writes its logs to stdout.** With telemetry, it may also send logs, traces and metrics
+   with OpenTelemetry, to the collector its `OTEL_` variables name ([Telemetry](telemetry.md)).
 6. **Handles a job twice safely**, and deletes its message only once the job is done.
 7. **Keeps migrations compatible with the previous release**, which may run against the
    new schema after a rollback.
@@ -1074,9 +1266,9 @@ ProtoStrap sets these environment variables in every replica:
 | `QUEUE_<NAME>_URL`                                                                   | The URL of each queue in the spec                |
 | `FILES_BUCKET`                                                                       | The files bucket                                 |
 | `BUCKET_<NAME>`                                                                      | The name of each bucket in the spec              |
-| `HOST_<NAME>`, `ORIGIN_<NAME>`                                                       | Each [host](#hosts)'s hostname in this account, and its origin, `https://<hostname>` |
+| `HOST_<NAME>`, `ORIGIN_<NAME>`                                                       | Each of the gateway's [hosts](#hosts)' hostname in this account, and its origin, `https://<hostname>` |
 | `AWS_REGION`                                                                         | The region                                       |
-| `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_PROTOCOL`, `OTEL_SERVICE_NAME`, `OTEL_RESOURCE_ATTRIBUTES` | The telemetry collector, and the component, replica, release and environment, unless the spec's `env` sets them ([Sending telemetry](telemetry.md#traces-and-metrics)) |
+| `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_PROTOCOL`, `OTEL_SERVICE_NAME`, `OTEL_RESOURCE_ATTRIBUTES` | With telemetry, the collector, and the component, replica, release and environment, unless the spec's `env` sets them ([Sending telemetry](telemetry.md#traces-and-metrics)) |
 
 
 ## On the path to managed services
@@ -1092,7 +1284,7 @@ ProtoStrap as follows:
   forgets every volume this way, and keeps them.
 - **Both have moved:** data-1 stays on, resized to a small type and renamed `control`,
   with the same fixed address and swarm volume, running only the scheduler, the swarm
-  manager, the reporter and telemetry. Any other data VM goes (see
+  manager, the reporter and, if the spec has it, telemetry. Any other data VM goes (see
   [Moving PostgreSQL and Redis](vms.md#moving-postgresql-and-redis)).
 - **VMs spread across zones:** each pool gets its groups in each zone, placement first
   prefers the zone with the fewest replicas of the service, then applies its usual rules,

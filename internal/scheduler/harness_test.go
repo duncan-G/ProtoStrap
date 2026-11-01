@@ -34,8 +34,8 @@ const (
 
 var epoch = time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)
 
-// testSpec is the sample's shape, small enough to reason about: an edge, two stateful
-// components, a migration task, two services and a worker.
+// testSpec is the sample's shape, small enough to reason about: a tunnel and a gateway,
+// telemetry, two stateful components, a migration task, two services and a worker.
 const testSpec = `app: shop
 protostrap: 1.4.0
 pools:
@@ -55,8 +55,15 @@ pools:
     target: 85%
     reserved: { cpu: 400m, memory: 1Gi }
   data: { vm: m7g.xlarge, count: 1 }
-edge:
+tunnel: {}
+gateway:
   request: { cpu: 500m, memory: 256Mi }
+  upstreams:
+    api:
+      routes: [/api/]
+    web:
+      routes: [/web/]
+telemetry: {}
 queues:
   jobs: {}
 buckets:
@@ -69,7 +76,6 @@ components:
     request: { cpu: 500m, memory: 512Mi }
     port: 8080
     ready: grpc
-    routes: [/api/]
     metrics: 9090/metrics
     depends_on: [postgres, redis]
     uses: [jobs, files, reports]
@@ -87,7 +93,6 @@ components:
     request: { cpu: 250m, memory: 256Mi }
     port: 3000
     ready: /healthz
-    routes: [/web/]
     depends_on: [api]
     scale:
       min: 1
@@ -272,10 +277,14 @@ func (h *harness) publishWith(commit, specText string, tags, config map[string]s
 		}
 		r.Components[name] = release.Component{Image: img, Fingerprint: c.Fingerprint(img, digest), Config: digest}
 	}
-	edgeImg := testRegistry + "/protostrap/edge:" + s.ProtoStrap
-	r.Edge = release.Component{Image: edgeImg, Fingerprint: release.EdgeFingerprint(edgeImg, s.Edge.Request)}
-	telImg := testRegistry + "/protostrap/telemetry:" + s.ProtoStrap
-	r.Telemetry = release.Component{Image: telImg, Fingerprint: release.TelemetryFingerprint(telImg, s.Telemetry)}
+	if s.Gateway != nil {
+		edgeImg := testRegistry + "/protostrap/edge:" + s.ProtoStrap
+		r.Edge = release.Component{Image: edgeImg, Fingerprint: release.EdgeFingerprint(edgeImg, s.Gateway.Request, s.Tunnel != nil)}
+	}
+	if s.Telemetry != nil {
+		telImg := testRegistry + "/protostrap/telemetry:" + s.ProtoStrap
+		r.Telemetry = release.Component{Image: telImg, Fingerprint: release.TelemetryFingerprint(telImg, *s.Telemetry)}
+	}
 	h.store.mu.Lock()
 	h.store.releases[commit] = r
 	h.store.mu.Unlock()

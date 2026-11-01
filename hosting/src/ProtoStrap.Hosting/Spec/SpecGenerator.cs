@@ -30,8 +30,8 @@ internal sealed partial class SpecGenerator(
 {
     private static readonly string[] FieldOrder =
     [
-        "kind", "project", "build", "context", "sources", "image", "command", "pool", "vm", "request", "port", "protocol", "ready",
-        "routes", "authorize", "metrics", "depends_on", "uses", "migrate", "configure", "env", "secrets", "secret_prefix", "secret_files",
+        "kind", "project", "build", "context", "sources", "image", "command", "pool", "vm", "request", "port", "ready",
+        "metrics", "depends_on", "uses", "migrate", "configure", "env", "secrets", "secret_prefix", "secret_files",
         "on_secret_change", "config", "on_config_change", "stop", "volume", "backup", "scale",
     ];
 
@@ -74,27 +74,55 @@ internal sealed partial class SpecGenerator(
 
         var document = new YamlMap(YamlStyle.Block);
         Top(document);
+        var pools = Pools();
+        var queues = Queues();
+        var buckets = Buckets();
+        var email = Email();
+        // The gateway's upstreams are components, so the components go first.
+        var components = await ComponentsAsync(cancellationToken);
+        var gateway = environment.Gateway is { } g ? Gateway(g) : null;
+        var telemetry = environment.Telemetry is { } t ? Telemetry(t) : null;
+        var cdn = environment.Cdn is { } c ? Cdn(c) : null;
+
         document.AddGroupBreak();
-        document["pools"] = Pools();
-        document.AddGroupBreak();
-        document["edge"] = Edge();
-        if (Queues() is { Count: > 0 } queues)
+        document["pools"] = pools;
+        if (cdn is not null)
+        {
+            document.AddGroupBreak();
+            document["cdn"] = cdn;
+        }
+        if (environment.Tunnel is not null)
+        {
+            document.AddGroupBreak();
+            document["tunnel"] = new YamlMap();
+        }
+        if (gateway is not null)
+        {
+            document.AddGroupBreak();
+            document["gateway"] = gateway;
+        }
+        if (telemetry is not null)
+        {
+            document.AddGroupBreak();
+            document["telemetry"] = telemetry;
+        }
+        if (queues.Count > 0)
         {
             document.AddGroupBreak();
             document["queues"] = queues;
         }
-        if (Buckets() is { Count: > 0 } buckets)
+        if (buckets.Count > 0)
         {
             document.AddGroupBreak();
             document["buckets"] = buckets;
         }
-        if (Email() is { } email)
+        if (email is not null)
         {
             document.AddGroupBreak();
             document["email"] = email;
         }
         document.AddGroupBreak();
-        document["components"] = await ComponentsAsync(cancellationToken);
+        document["components"] = components;
 
         if (_problems.Count > 0)
             return new SpecResult(specPath, null, _problems, _warnings);
@@ -106,7 +134,7 @@ internal sealed partial class SpecGenerator(
         return new SpecResult(specPath, YamlWriter.Write(document, header), _problems, _warnings);
     }
 
-    // This section writes the environment's keys: app, protostrap, hosts, pools and edge.
+    // This section writes the environment's keys: app, protostrap and pools.
 
     private void Top(YamlMap document)
     {
@@ -118,26 +146,6 @@ internal sealed partial class SpecGenerator(
             _problems.Add($"{at}WithVersion(\"{version}\") isn't a ProtoStrap version, like 1.4.0");
         document["app"] = environment.App;
         document["protostrap"] = version;
-
-        var named = new Dictionary<string, string>(StringComparer.Ordinal); // It maps each hostname to the first host's name.
-        foreach (var host in environment.HostSettings)
-        {
-            if (!DnsLabel().IsMatch(host.Name))
-                _problems.Add($"{at}WithHost: \"{host.Name}\" isn't a host's name: lowercase letters, digits and dashes");
-            if (!HostName().IsMatch(host.Hostname))
-                _problems.Add($"{at}WithHost: \"{host.Hostname}\" isn't a host name");
-            else if (named.TryGetValue(host.Hostname, out var other) && other != host.Name)
-                _problems.Add($"{at}WithHost: {host.Name} has {host.Hostname} too, which {other} has: each host has a hostname of its own");
-            else
-                named.TryAdd(host.Hostname, host.Name);
-        }
-        if (environment.Hosts.Count > 0)
-        {
-            var hosts = new YamlMap(YamlStyle.Block);
-            foreach (var (name, hostname) in environment.Hosts.OrderBy(h => h.Key, StringComparer.Ordinal))
-                hosts[name] = hostname;
-            document["hosts"] = hosts;
-        }
     }
 
     private YamlMap Pools()
@@ -223,24 +231,251 @@ internal sealed partial class SpecGenerator(
         return new YamlMap { ["cpu"] = cpuValue ?? cpu, ["memory"] = memoryValue ?? memory };
     }
 
-    private YamlMap Edge()
+    /// <summary>
+    /// Request writes what one of ProtoStrap's own components reserves, as WithRequest gave it,
+    /// or its default.
+    /// </summary>
+    private YamlMap? Request(string at, ResourceSettings request)
     {
-        var at = $"{environment.Name}: WithEdge: ";
-        var edge = environment.Edge ?? new ResourceSettings("500m", "256Mi");
-        var cpu = Quantity.Cpu(edge.Cpu);
+        var cpu = Quantity.Cpu(request.Cpu);
         if (cpu is null)
-            _problems.Add($"{at}cpu \"{edge.Cpu}\" isn't CPU, like \"500m\" or \"2\"");
+            _problems.Add($"{at}cpu \"{request.Cpu}\" isn't CPU, like \"500m\" or \"2\"");
         else if (cpu == "0m")
             _problems.Add(at + "cpu must be above 0");
-        var memory = Quantity.Memory(edge.Memory);
+        var memory = Quantity.Memory(request.Memory);
         if (memory is null)
-            _problems.Add($"{at}memory \"{edge.Memory}\" isn't memory, like \"512Mi\" or \"1Gi\"");
+            _problems.Add($"{at}memory \"{request.Memory}\" isn't memory, like \"512Mi\" or \"1Gi\"");
         else if (memory == "0Mi")
             _problems.Add(at + "memory must be above 0");
-        return new YamlMap(YamlStyle.Block)
+        return cpu is null || memory is null ? null : new YamlMap { ["cpu"] = cpu, ["memory"] = memory };
+    }
+
+    // This section writes ProtoStrap's own components: the CDN, the gateway and telemetry. The
+    // tunnel has no settings.
+
+    private static readonly TimeSpan[] RateLimitPeriods =
+        [TimeSpan.FromSeconds(10), TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(2), TimeSpan.FromMinutes(5), TimeSpan.FromMinutes(10), TimeSpan.FromHours(1)];
+
+    private static readonly HashSet<string> HttpMethods = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"];
+
+    /// <summary>
+    /// Cdn writes the CDN: its rate limit, and its WAF and cache rules in the order they were
+    /// added, with the rules `protostrap check` applies.
+    /// </summary>
+    private YamlMap Cdn(ProtoStrapCdnResource cdn)
+    {
+        var at = cdn.Name + ": ";
+        var map = new YamlMap(YamlStyle.Block);
+        if (cdn.RateLimit is { } limit)
         {
-            ["request"] = new YamlMap { ["cpu"] = cpu ?? edge.Cpu, ["memory"] = memory ?? edge.Memory },
-        };
+            if (limit.Requests < 1)
+                _problems.Add(at + "WithRateLimit: requests must be at least 1");
+            var period = Quantity.Duration(limit.Period) ?? Quantity.Decimal(limit.Period.TotalMilliseconds) + "ms";
+            if (!RateLimitPeriods.Contains(limit.Period))
+                _problems.Add($"{at}WithRateLimit: period {period} must be 10s, 1m, 2m, 5m, 10m or 1h, Cloudflare's periods");
+            map["rate_limit"] = new YamlMap { ["requests"] = YamlScalar.Number(limit.Requests), ["period"] = period };
+        }
+        if (CdnRules(cdn, "WithWafRule", cdn.WafRules, waf: true) is { Items.Count: > 0 } waf)
+            map["waf"] = waf;
+        if (CdnRules(cdn, "WithCacheRule", cdn.CacheRules, waf: false) is { Items.Count: > 0 } cache)
+            map["cache"] = cache;
+        return map;
+    }
+
+    /// <summary>CdnRules writes a list of the CDN's rules, each on a line of its own.</summary>
+    private YamlSeq CdnRules(ProtoStrapCdnResource cdn, string method, List<CdnRuleSettings> rules, bool waf)
+    {
+        var items = new List<YamlNode>();
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var rule in rules)
+        {
+            if (!DnsLabel().IsMatch(rule.Name))
+                _problems.Add($"{cdn.Name}: {method}: \"{rule.Name}\" must be lowercase letters, digits and dashes");
+            else if (!names.Add(rule.Name))
+                _problems.Add($"{cdn.Name}: {method}: {rule.Name} is named twice: each rule has a name of its own");
+            items.Add(CdnRule($"{cdn.Name}: {method}(\"{rule.Name}\"): ", rule, waf));
+        }
+        return new YamlSeq(YamlStyle.Block, items);
+    }
+
+    /// <summary>CdnRule writes one of the CDN's rules: what it matches, then what it does.</summary>
+    private YamlMap CdnRule(string at, CdnRuleSettings rule, bool waf)
+    {
+        var map = new YamlMap { ["name"] = rule.Name };
+        var gateway = environment.Gateway;
+        var hosts = gateway?.Hosts ?? new Dictionary<string, string>();
+        foreach (var host in rule.Hosts)
+        {
+            if (host.Contains('.'))
+                _problems.Add($"{at}a rule names a host by its name, such as {hosts.Keys.Order(StringComparer.Ordinal).FirstOrDefault() ?? "app"}, not {host}");
+            else if (!hosts.ContainsKey(host))
+                _problems.Add($"{at}no host {host}: call WithHost(\"{host}\", ...) on {gateway?.Name ?? "the gateway"}");
+        }
+        foreach (var path in rule.Paths.Where(p => !p.StartsWith('/') || p.IndexOfAny(['"', '\\', ' ', '\t']) >= 0))
+            _problems.Add($"{at}\"{path}\" isn't a path prefix that starts with /, such as /admin/");
+        foreach (var extension in rule.Extensions.Where(e => !CdnExtension().IsMatch(e)))
+            _problems.Add($"{at}\"{extension}\" isn't a file extension: up to 10 lower-case letters and digits, such as js");
+        foreach (var verb in rule.Methods.Where(m => !HttpMethods.Contains(m)))
+            _problems.Add($"{at}\"{verb}\" isn't an HTTP method in upper case, such as POST");
+        foreach (var country in rule.Countries.Concat(rule.NotCountries).Where(c => !CountryCode().IsMatch(c)))
+            _problems.Add($"{at}\"{country}\" isn't a two-letter country code, such as US");
+        foreach (var ip in rule.Ips.Concat(rule.NotIps).Where(ip => !System.Net.IPNetwork.TryParse(ip, out _) && !System.Net.IPAddress.TryParse(ip, out _)))
+            _problems.Add($"{at}\"{ip}\" isn't an IP address or range, such as 203.0.113.0/24");
+        if (rule.Expression is { } expression && string.IsNullOrWhiteSpace(expression))
+            _problems.Add(at + "the expression is empty");
+
+        foreach (var (field, values) in new (string, List<string>)[]
+        {
+            ("hosts", rule.Hosts), ("paths", rule.Paths), ("extensions", rule.Extensions), ("methods", rule.Methods),
+            ("countries", rule.Countries), ("not_countries", rule.NotCountries), ("ips", rule.Ips), ("not_ips", rule.NotIps),
+        })
+        {
+            if (values.Count > 0)
+                map[field] = Seq(values);
+        }
+        if (rule.Expression is { } e)
+            map["expression"] = e;
+
+        if (waf)
+        {
+            if (rule.Action is { } action)
+                map["action"] = action;
+            else
+                _problems.Add(at + "no action: call Block(), ManagedChallenge(), JsChallenge(), Challenge() or Skip()");
+            return map;
+        }
+        if (rule.Bypass)
+            map["cache"] = YamlScalar.Bool(false);
+        foreach (var (field, what, ttl) in new[] { ("edge_ttl", "edge", rule.EdgeTtl), ("browser_ttl", "browser", rule.BrowserTtl) })
+        {
+            if (ttl is not { } t)
+                continue;
+            var text = Quantity.Duration(t) ?? Quantity.Decimal(t.TotalMilliseconds) + "ms";
+            if (t < TimeSpan.FromSeconds(1))
+                _problems.Add($"{at}the {what} TTL must be at least 1s");
+            else if (t.Ticks % TimeSpan.TicksPerSecond != 0)
+                _problems.Add($"{at}the {what} TTL {text} isn't a whole number of seconds");
+            else
+                map[field] = text;
+        }
+        return map;
+    }
+
+    /// <summary>
+    /// Gateway writes the gateway: what it reserves, its hosts, and its upstreams, each with its
+    /// protocol, routes and authorizer.
+    /// </summary>
+    private YamlMap Gateway(ProtoStrapGatewayResource gateway)
+    {
+        var at = gateway.Name + ": ";
+        var map = new YamlMap(YamlStyle.Block);
+        if (Request(at + "WithRequest: ", gateway.Request ?? new ResourceSettings("500m", "256Mi")) is { } request)
+            map["request"] = request;
+
+        var named = new Dictionary<string, string>(StringComparer.Ordinal); // It maps each hostname to the first host's name.
+        foreach (var host in gateway.HostSettings)
+        {
+            if (!DnsLabel().IsMatch(host.Name))
+                _problems.Add($"{at}WithHost: \"{host.Name}\" isn't a host's name: lowercase letters, digits and dashes");
+            if (!HostName().IsMatch(host.Hostname))
+                _problems.Add($"{at}WithHost: \"{host.Hostname}\" isn't a host name");
+            else if (named.TryGetValue(host.Hostname, out var other) && other != host.Name)
+                _problems.Add($"{at}WithHost: {host.Name} has {host.Hostname} too, which {other} has: each host has a hostname of its own");
+            else
+                named.TryAdd(host.Hostname, host.Name);
+        }
+        if (gateway.Hosts.Count > 0)
+        {
+            var hosts = new YamlMap(YamlStyle.Block);
+            foreach (var (name, hostname) in gateway.Hosts.OrderBy(h => h.Key, StringComparer.Ordinal))
+                hosts[name] = hostname;
+            map["hosts"] = hosts;
+        }
+
+        var upstreams = new YamlMap(YamlStyle.Block);
+        foreach (var upstream in gateway.Upstreams.OrderBy(u => u.Resource.Name, StringComparer.Ordinal))
+        {
+            if (Upstream(gateway, upstream) is { } entry)
+                upstreams[upstream.Resource.Name] = entry;
+        }
+        if (upstreams.Count > 0)
+            map["upstreams"] = upstreams;
+        return map;
+    }
+
+    /// <summary>
+    /// Upstream writes one of the gateway's upstreams, a service, as the spec has it: what the
+    /// gateway speaks to it, its routes, and who authorizes its requests.
+    /// </summary>
+    private YamlMap? Upstream(ProtoStrapGatewayResource gateway, UpstreamSettings upstream)
+    {
+        var resource = upstream.Resource;
+        var at = resource.Name + ": WithUpstream: ";
+        if (resource.IsExcludedFromPublish())
+        {
+            _problems.Add($"{at}{resource.Name} is excluded from publish");
+            return null;
+        }
+        if (!_components.TryGetValue(resource, out var c) || c.Settings is null)
+        {
+            // A callback that failed is reported with the component.
+            if (c?.CallbackError is null)
+                _problems.Add($"{at}{resource.Name} isn't a ProtoStrap component: call PublishAsProtoStrapService(...)");
+            return null;
+        }
+        if (c.Settings.Kind != ComponentKind.Service)
+        {
+            var kind = c.Settings.Kind == ComponentKind.Stateful ? "stateful component" : c.Settings.Kind.ToString().ToLowerInvariant();
+            _problems.Add($"{at}{resource.Name} is a {kind}: only services get requests from the gateway");
+            return null;
+        }
+        if (upstream.Routes.Count == 0)
+            _problems.Add(at + "no routes: call Routes(...) or Route(...)");
+
+        var map = new YamlMap(YamlStyle.Block);
+        if (upstream.Protocol is { } protocol)
+            map["protocol"] = YamlScalar.String(protocol.ToString().ToLowerInvariant());
+        if (Routes(c, gateway, upstream.Routes) is { } routes)
+            map["routes"] = routes;
+        if (upstream.Authorize is { } authorize && Authorize(c, upstream, authorize) is { } authorizeMap)
+            map["authorize"] = authorizeMap;
+        return map;
+    }
+
+    /// <summary>
+    /// Telemetry writes telemetry's settings, those WithRequest, WithVolume and WithRetention
+    /// gave it, with the rules `protostrap check` applies.
+    /// </summary>
+    private YamlMap Telemetry(ProtoStrapTelemetryResource telemetry)
+    {
+        var at = telemetry.Name + ": ";
+        var map = new YamlMap(YamlStyle.Block);
+        if (telemetry.Request is { } given && Request(at + "WithRequest: ", given) is { } request)
+        {
+            if (Quantity.Memory(given.Memory) is { } memory && memory.EndsWith("Mi", StringComparison.Ordinal)
+                && long.Parse(memory[..^2], CultureInfo.InvariantCulture) < 1024)
+                _problems.Add($"{at}WithRequest: {memory} is too little memory for its five programs: at least 1Gi");
+            map["request"] = request;
+        }
+        if (telemetry.Volume is { } volume)
+        {
+            var size = Quantity.Size(volume);
+            if (size is null)
+                _problems.Add($"{at}WithVolume: \"{volume}\" isn't a whole number of GiB, like \"20Gi\"");
+            else if (long.Parse(size[..^2], CultureInfo.InvariantCulture) < 5)
+                _problems.Add($"{at}WithVolume: {size} is too small: at least 5Gi");
+            else
+                map["volume"] = size;
+        }
+        var retention = new YamlMap();
+        foreach (var (field, duration) in new[] { ("logs", telemetry.Logs), ("traces", telemetry.Traces), ("metrics", telemetry.Metrics) })
+        {
+            if (duration is { } d && Days(d, $"{at}WithRetention: {field}") is { Length: > 0 } days)
+                retention[field] = days;
+        }
+        if (retention.Count > 0)
+            map["retention"] = retention;
+        return map;
     }
 
     // This section writes the queues.
@@ -532,15 +767,6 @@ internal sealed partial class SpecGenerator(
             else if (ready is null && kind == ComponentKind.Service)
                 Problem(c, "no readiness check: call Ready(Readiness.Grpc) or Ready(\"/healthz\"), or WithHttpHealthCheck(\"/healthz\")");
         }
-        if (kind == ComponentKind.Service)
-        {
-            if (settings.Protocol is { } protocol)
-                fields["protocol"] = YamlScalar.String(protocol.ToString().ToLowerInvariant());
-            if (Routes(c, settings.Routes) is { } routes)
-                fields["routes"] = routes;
-            if (settings.Authorize is { } authorize && Authorize(c, settings, authorize) is { } authorizeMap)
-                fields["authorize"] = authorizeMap;
-        }
         if (settings.Metrics is { } metrics)
         {
             if (metrics.Port is < 1 or > 65535)
@@ -773,7 +999,7 @@ internal sealed partial class SpecGenerator(
         return cpu is null || memory is null ? null : new YamlMap { ["cpu"] = cpu, ["memory"] = memory };
     }
 
-    private YamlSeq? Routes(Component c, IReadOnlyList<RouteSettings> routes)
+    private YamlSeq? Routes(Component c, ProtoStrapGatewayResource gateway, IReadOnlyList<RouteSettings> routes)
     {
         var items = new List<YamlNode>();
         foreach (var route in routes)
@@ -786,9 +1012,9 @@ internal sealed partial class SpecGenerator(
             var host = route.Route.StartsWith('/') ? "" : route.Route.Split('/')[0];
             var path = host.Length == 0 ? route.Route : route.Route[host.Length..];
             if (host.Length > 0 && host.Contains('.'))
-                Problem(c, $"Routes: a route names its host by its name, such as {environment.Hosts.Keys.Order(StringComparer.Ordinal).FirstOrDefault() ?? "app"}{(path.Length > 0 ? path : "/")}, not {host}");
-            else if (host.Length > 0 && !environment.Hosts.ContainsKey(host))
-                Problem(c, $"Routes: no host {host}: call WithHost(\"{host}\", ...)");
+                Problem(c, $"Routes: a route names its host by its name, such as {gateway.Hosts.Keys.Order(StringComparer.Ordinal).FirstOrDefault() ?? "app"}{(path.Length > 0 ? path : "/")}, not {host}");
+            else if (host.Length > 0 && !gateway.Hosts.ContainsKey(host))
+                Problem(c, $"Routes: no host {host}: call WithHost(\"{host}\", ...) on {gateway.Name}");
             if (route.Rate is not { } rate)
             {
                 items.Add(route.Route);
@@ -806,10 +1032,10 @@ internal sealed partial class SpecGenerator(
     }
 
     /// <summary>
-    /// Authorize writes the service that authorizes the component's requests at the edge, with
+    /// Authorize writes the service that authorizes an upstream's requests at the gateway, with
     /// the rules `protostrap check` applies.
     /// </summary>
-    private YamlMap? Authorize(Component c, ComponentSettings settings, AuthorizeSettings authorize)
+    private YamlMap? Authorize(Component c, UpstreamSettings upstream, AuthorizeSettings authorize)
     {
         var ok = true;
         void Fail(string message)
@@ -817,8 +1043,6 @@ internal sealed partial class SpecGenerator(
             Problem(c, "Authorize: " + message);
             ok = false;
         }
-        if (settings.Routes.Count == 0)
-            Fail("only a service with routes takes requests through the edge");
         var by = authorize.By;
         if (by.IsExcludedFromPublish())
             Fail($"{by.Name} is excluded from publish");
@@ -873,7 +1097,7 @@ internal sealed partial class SpecGenerator(
             // The edge matches the path as RFC 3986 normalises it, which never has // or a dot segment.
             else if (CleanPrefix(skip) is var clean && clean != skip)
                 Fail($"write {skip} as {clean}");
-            else if (settings.Routes.Count > 0 && !settings.Routes.Any(r => Within(skip, RoutePath(r.Route))))
+            else if (upstream.Routes.Count > 0 && !upstream.Routes.Any(r => Within(skip, RoutePath(r.Route))))
                 Fail($"{skip} isn't under any of the service's routes");
         }
         if (extensions > 30)
@@ -1393,8 +1617,8 @@ internal sealed partial class SpecGenerator(
                         demand.Add(new YamlMap { ["requests"] = rate });
                     else
                         Fail("requests must be above 0 per second");
-                    if (settings.Kind != ComponentKind.Service || settings.Routes.Count == 0)
-                        Fail("a requests signal is counted by the gateway, so only a service with routes has one");
+                    if (settings.Kind != ComponentKind.Service || environment.Gateway?.UpstreamOf(c.Resource) is null)
+                        Fail("a requests signal is counted by the gateway, so only one of its upstreams has one");
                     break;
                 case QueueSignal queue:
                     var jobs = Quantity.Rate(queue.Rate);
@@ -1623,13 +1847,14 @@ internal sealed partial class SpecGenerator(
     /// </summary>
     private YamlNode? ReadyField(Component c, ComponentKind kind, Readiness ready, ComponentSettings settings)
     {
-        var routed = kind == ComponentKind.Service && settings.Routes.Count > 0;
+        var upstream = kind == ComponentKind.Service ? environment.Gateway?.UpstreamOf(c.Resource) : null;
+        var routed = upstream is not null;
         if (ready.CommandLine is { } command)
         {
             if (command.Count == 0 || command.Any(string.IsNullOrWhiteSpace))
                 Problem(c, "Ready: a command can't be empty");
             else if (routed)
-                Problem(c, "Ready: the edge checks a routed service too, and can't run a command: use Readiness.Grpc, Readiness.Tcp or an HTTP path");
+                Problem(c, "Ready: the gateway checks its upstreams too, and can't run a command: use Readiness.Grpc, Readiness.Tcp or an HTTP path");
             else
                 return Seq(command);
             return null;
@@ -1650,10 +1875,10 @@ internal sealed partial class SpecGenerator(
             Problem(c, $"Ready: a {kind.ToString().ToLowerInvariant()} has no port, so its check names one, such as {example}");
             return null;
         }
-        var protocol = settings.Protocol ?? (ready.Kind == "grpc" && ready.Port is null ? GatewayProtocol.Grpc : GatewayProtocol.Http1);
+        var protocol = upstream?.Protocol ?? (ready.Kind == "grpc" && ready.Port is null ? GatewayProtocol.Grpc : GatewayProtocol.Http1);
         if (routed && ready.Kind == "grpc" && protocol == GatewayProtocol.Http1)
         {
-            Problem(c, "Ready: the edge checks gRPC over its HTTP/2 connections to the service: set Protocol(GatewayProtocol.Http2) or Protocol(GatewayProtocol.Grpc)");
+            Problem(c, "Ready: the gateway checks gRPC over its HTTP/2 connections to the service: set Protocol(GatewayProtocol.Http2) or Protocol(GatewayProtocol.Grpc) on its upstream");
             return null;
         }
         return YamlScalar.String(ready.Value!);
@@ -1736,6 +1961,12 @@ internal sealed partial class SpecGenerator(
         var list = items.ToList();
         return list.Count <= 1 ? string.Concat(list) : string.Join(", ", list[..^1]) + " and " + list[^1];
     }
+
+    [GeneratedRegex("^[a-z0-9]{1,10}$")]
+    private static partial Regex CdnExtension();
+
+    [GeneratedRegex("^[A-Z][A-Z0-9]$")]
+    private static partial Regex CountryCode();
 
     [GeneratedRegex("^[a-z0-9]([a-z0-9-]*[a-z0-9])?$")]
     private static partial Regex DnsLabel();

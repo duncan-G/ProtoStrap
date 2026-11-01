@@ -13,9 +13,9 @@ using ProtoStrap.Hosting.Tests.Support;
 namespace ProtoStrap.Hosting.Tests;
 
 /// <summary>
-/// The local edge is rendered by `protostrap edge render`: the protostrap WithCheck names, or
+/// The local gateway is rendered by `protostrap edge render`: the protostrap WithCheck names, or
 /// one the AppHost builds with the machine's Go from the ProtoStrap checkout ProtoStrap.Hosting
-/// is built from, or else protostrap on PATH (docs/protostrap-aspire.md, "The local edge").
+/// is built from, or else protostrap on PATH (docs/protostrap-aspire.md, "The local gateway").
 /// </summary>
 public class ProtoStrapBinaryTests
 {
@@ -211,11 +211,12 @@ public class ProtoStrapBinaryTests
         using var repo = new FixtureRepo();
         var fake = new FakeGo(repo, onPath: true);
         var builder = TestApp.Publish(repo);
-        var protostrap = builder.AddEnvironment().WithHost("app", "protofast.dev", local: "app.dev.localhost");
+        var protostrap = builder.AddEnvironment();
         protostrap.Resource.SourceTracerFactory = root => new ProjectDirectoryTracer(root);
         protostrap.Resource.Binary = fake.Binary();
-        builder.AddProject("api", repo.Project("services/api/Api.csproj", "Microsoft.NET.Sdk.Web"))
-            .PublishAsProtoStrapService(s => s.Request(cpu: "500m", memory: "512Mi").Ready(Readiness.Grpc).Route("app/", rate: 100));
+        var api = builder.AddProject("api", repo.Project("services/api/Api.csproj", "Microsoft.NET.Sdk.Web"))
+            .PublishAsProtoStrapService(s => s.Request(cpu: "500m", memory: "512Mi").Ready(Readiness.Grpc));
+        protostrap.AddEnvoyGateway("gateway").WithHost("app", "protofast.dev", local: "app.dev.localhost").WithUpstream(api, u => u.Route("app/", rate: 100));
         await using var app = builder.Build();
 
         await SpecStep.WriteAsync(
@@ -223,10 +224,10 @@ public class ProtoStrapBinaryTests
             app.Services.GetRequiredService<DistributedApplicationExecutionContext>(), NullLogger.Instance, TestContext.Current.CancellationToken);
 
         // A pipeline builds protostrap and puts it on PATH: publishing only looks for it, and
-        // has no edge to render.
+        // has no gateway to render.
         Assert.True(File.Exists(repo.SpecPath));
         Assert.Empty(fake.Builds);
-        Assert.DoesNotContain(builder.Resources, r => r.Name == "protostrap-edge");
+        Assert.DoesNotContain(builder.Resources, r => r.Name == "gateway");
     }
 
     // A protostrap the AppHost doesn't build itself, one on PATH or one WithCheck names, may not
@@ -392,11 +393,12 @@ public class ProtoStrapBinaryTests
         var fake = new FakeGo(repo, onPath: true);
         var installed = repo.WriteExecutable("path/protostrap", "#!/bin/sh\nexit 0\n");
         var builder = TestApp.Publish(repo);
-        var protostrap = builder.AddEnvironment().WithHost("app", "protofast.dev", local: "app.dev.localhost");
+        var protostrap = builder.AddEnvironment();
         protostrap.Resource.SourceTracerFactory = root => new ProjectDirectoryTracer(root);
         protostrap.Resource.Binary = fake.Binary(path: repo.PathOf("path"), head: Head);
-        builder.AddProject("api", repo.Project("services/api/Api.csproj", "Microsoft.NET.Sdk.Web"))
-            .PublishAsProtoStrapService(s => s.Request(cpu: "500m", memory: "512Mi").Ready(Readiness.Grpc).Route("app/", rate: 100));
+        var api = builder.AddProject("api", repo.Project("services/api/Api.csproj", "Microsoft.NET.Sdk.Web"))
+            .PublishAsProtoStrapService(s => s.Request(cpu: "500m", memory: "512Mi").Ready(Readiness.Grpc));
+        protostrap.AddEnvoyGateway("gateway").WithHost("app", "protofast.dev", local: "app.dev.localhost").WithUpstream(api, u => u.Route("app/", rate: 100));
         await using var app = builder.Build();
         var logger = new ListLogger();
 

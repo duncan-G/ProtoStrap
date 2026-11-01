@@ -1,4 +1,4 @@
-# The edge (docs/protostrap.md#edge) runs cloudflared and Envoy in one container, so the
+# The edge (docs/protostrap.md#gateway) runs cloudflared and Envoy in one container, so the
 # pair is always placed, started and stopped together. `protostrap edge` runs both, answers
 # the agent's readiness check, and serves Envoy's request counts.
 #

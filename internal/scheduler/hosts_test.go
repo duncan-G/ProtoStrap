@@ -21,9 +21,9 @@ import (
 var hostsSpec = func() string {
 	s := testSpec
 	for _, edit := range [][2]string{
-		{"protostrap: 1.4.0\n", "protostrap: 1.4.0\nhosts:\n  shop: shop.example.com\n  admin: admin.example.com\n"},
-		{"    routes: [/api/]\n", "    routes: [shop/api/]\n"},
-		{"    routes: [/web/]\n", "    routes: [admin/, /web/]\n"},
+		{"  request: { cpu: 500m, memory: 256Mi }\n  upstreams:\n", "  request: { cpu: 500m, memory: 256Mi }\n  hosts:\n    shop: shop.example.com\n    admin: admin.example.com\n  upstreams:\n"},
+		{"      routes: [/api/]\n", "      routes: [shop/api/]\n"},
+		{"      routes: [/web/]\n", "      routes: [admin/, /web/]\n"},
 	} {
 		if !strings.Contains(s, edit[0]) {
 			panic("testSpec has no " + edit[0])
@@ -290,8 +290,8 @@ func (s *fakeStore) saved() release.State {
 // cluster even when it has no routes of its own, and with what of the authorizer's answer
 // goes to the request and what to the client.
 func TestTheEdgeAsksAnAuthorizer(t *testing.T) {
-	sp := strings.Replace(hostsSpec, "    routes: [shop/api/]\n",
-		"    routes: [shop/api/]\n    authorize: { by: web, path: /check, headers: [x-user], forward: [cookie], respond: [set-cookie] }\n", 1)
+	sp := strings.Replace(hostsSpec, "      routes: [shop/api/]\n",
+		"      routes: [shop/api/]\n      authorize: { by: web, path: /check, headers: [x-user], forward: [cookie], respond: [set-cookie] }\n", 1)
 	h := newHarness(t)
 	h.deploy("c1", sp, nil)
 	h.until("the first release finishes", 10*time.Minute, func() bool { return h.rollout("c1") == RolloutDone })
@@ -306,8 +306,8 @@ func TestTheEdgeAsksAnAuthorizer(t *testing.T) {
 
 // EdgeServices hands the edge each part of a service's authorize as the spec has it.
 func TestEdgeServicesCarryTheAuthorizer(t *testing.T) {
-	sp, err := spec.Parse([]byte(strings.Replace(hostsSpec, "    routes: [shop/api/]\n",
-		"    routes: [shop/api/]\n    authorize: { by: web, headers: [x-user], forward: [cookie], respond: [set-cookie, x-expires] }\n", 1)))
+	sp, err := spec.Parse([]byte(strings.Replace(hostsSpec, "      routes: [shop/api/]\n",
+		"      routes: [shop/api/]\n      authorize: { by: web, headers: [x-user], forward: [cookie], respond: [set-cookie, x-expires] }\n", 1)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -323,8 +323,8 @@ func TestEdgeServicesCarryTheAuthorizer(t *testing.T) {
 	}
 
 	// The timeout reaches the edge as a Go duration, as Hosting writes it for the local edge.
-	sp, err = spec.Parse([]byte(strings.Replace(hostsSpec, "    routes: [shop/api/]\n",
-		"    routes: [shop/api/]\n    authorize: { by: web, open: true, timeout: 1500ms, skip: [/api/assets/, \"*.js\"] }\n", 1)))
+	sp, err = spec.Parse([]byte(strings.Replace(hostsSpec, "      routes: [shop/api/]\n",
+		"      routes: [shop/api/]\n      authorize: { by: web, open: true, timeout: 1500ms, skip: [/api/assets/, \"*.js\"] }\n", 1)))
 	if err != nil {
 		t.Fatal(err)
 	}

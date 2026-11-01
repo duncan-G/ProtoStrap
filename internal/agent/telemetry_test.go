@@ -42,6 +42,34 @@ func TestEveryReplicaSendsItsOutputToTelemetry(t *testing.T) {
 	}
 }
 
+// TestWithoutTelemetryOutputGoesToCloudWatch checks that a replica whose spec names a log
+// group, as the scheduler does when the application runs no telemetry, logs there with
+// Docker's awslogs driver, never blocking on CloudWatch.
+func TestWithoutTelemetryOutputGoesToCloudWatch(t *testing.T) {
+	h := newHarness(t, dataVM)
+	h.volumes.mounted[filepath.Join(h.cfg.DataDir, "postgres")] = true
+	specs := []api.ReplicaSpec{service("api-1"), worker("w-1"), task("m-1", "migrate"), edge("edge-1"), stateful("postgres-1", "postgres", 1000, "/data")}
+	for i := range specs {
+		specs[i].LogGroup = "/protostrap/shop/" + specs[i].Component
+	}
+	h.sched.assign(specs...)
+	h.mustTick()
+	for _, r := range specs {
+		s := h.rt.specOf(r.ID)
+		want := map[string]string{
+			"awslogs-region":       "eu-west-1",
+			"awslogs-group":        "/protostrap/shop/" + r.Component,
+			"awslogs-create-group": "false",
+			"tag":                  "{{.Name}}",
+			"mode":                 "non-blocking",
+			"max-buffer-size":      "4m",
+		}
+		if s.LogDriver != "awslogs" || !maps.Equal(s.LogOptions, want) {
+			t.Errorf("%s: log driver %q options\n got %v\nwant %v", r.ID, s.LogDriver, s.LogOptions, want)
+		}
+	}
+}
+
 func TestTelemetryReplicaSettings(t *testing.T) {
 	h := newHarness(t, dataVM)
 	h.volumes.mounted[filepath.Join(h.cfg.DataDir, "telemetry")] = true
