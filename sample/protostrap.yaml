@@ -7,7 +7,7 @@
 # sample. Its hostname differs between accounts, so each account's Terraform config gives it
 # one (sample/infra/test/main.tf). Routes are paths, which match every host.
 app: sample
-protostrap: 0.1.2
+protostrap: 0.1.3
 
 pools:
   ingress: { vm: c8g.medium }
