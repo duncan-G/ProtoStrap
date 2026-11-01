@@ -1,7 +1,7 @@
 # The CDN (docs/network.md#cloudflare) is Cloudflare in front of everything. With a tunnel,
 # every host points at it; Cloudflare terminates TLS, sends plain HTTP to HTTPS, caches static
-# assets (its default, which leaves API responses alone), and checks who operators are
-# before an operator UI gets a request. The zone already exists: it is referenced, never
+# assets (its default, which leaves API responses alone) for as long as the origin's headers
+# say, and checks who operators are before an operator UI gets a request. The zone already exists: it is referenced, never
 # created.
 #
 # The spec's cdn section (docs/protostrap.md#cdn) adds the application's own WAF rules, cache
@@ -70,6 +70,15 @@ resource "cloudflare_zone_setting" "min_tls_version" {
   zone_id    = data.cloudflare_zone.app.id
   setting_id = "min_tls_version"
   value      = "1.2"
+}
+
+# 0 is Respect Existing Headers. Cloudflare's default, 4 hours, raises any shorter max-age the
+# origin sends, so a file whose URL never changes stays stale in browsers, which no purge
+# reaches.
+resource "cloudflare_zone_setting" "browser_cache_ttl" {
+  zone_id    = data.cloudflare_zone.app.id
+  setting_id = "browser_cache_ttl"
+  value      = 0
 }
 
 resource "cloudflare_ruleset" "rate_limit" {

@@ -700,8 +700,9 @@ places and the new isn't read at all.
   application's zone. Nothing runs on a VM for it. It runs when the spec has `cdn`, and
   needs the tunnel: `protostrap check` says to add `tunnel: {}`. `cdn: {}` runs Cloudflare
   with ProtoStrap's settings alone.
-- **ProtoStrap's settings stay its own.** Always Use HTTPS and a minimum of TLS 1.2, for
-  the whole zone, are fixed in Terraform, and Cloudflare Access for operator UIs comes from
+- **ProtoStrap's settings stay its own.** Always Use HTTPS, a minimum of TLS 1.2, and a
+  browser cache that keeps the origin's `Cache-Control` (Respect Existing Headers), for the
+  whole zone, are fixed in Terraform, and Cloudflare Access for operator UIs comes from
   the account's `operator_hosts` ([Operator UIs](network.md#operator-uis)). `cdn` adds to
   them and changes neither.
 
@@ -730,7 +731,10 @@ cdn:
   origin's TTLs, or for `edge_ttl` at Cloudflare and `browser_ttl` in browsers over the
   origin's headers, in whole seconds and at least `1s`. `cache: false` bypasses the cache
   instead, and takes no TTLs. Every rule that matches applies, a later one over an earlier.
-  Without one, Cloudflare caches what it does by default: static files, by their extension.
+  Without one, Cloudflare caches what it does by default: static files, by their extension,
+  for as long as the origin's headers say. Cloudflare can't purge a browser's copy, so a
+  file whose URL doesn't change with its content needs a short `max-age` or `no-cache` from
+  its origin, and no `browser_ttl` over it.
 
 A rule matches with these fields, each optional but `name`:
 

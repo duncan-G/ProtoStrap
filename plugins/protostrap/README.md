@@ -33,7 +33,7 @@ it gets the same skills:
 {
   "extraKnownMarketplaces": {
     "protostrap": {
-      "source": { "source": "github", "repo": "duncan-G/protostrap", "ref": "v0.1.2" }
+      "source": { "source": "github", "repo": "duncan-G/protostrap", "ref": "v0.1.3" }
     }
   },
   "enabledPlugins": {
@@ -45,7 +45,7 @@ it gets the same skills:
 Or for yourself, in a Claude Code session:
 
 ```
-/plugin marketplace add duncan-G/protostrap#v0.1.2
+/plugin marketplace add duncan-G/protostrap#v0.1.3
 /plugin install protostrap@protostrap
 ```
 

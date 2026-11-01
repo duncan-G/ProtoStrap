@@ -806,4 +806,8 @@ run "no_cdn" {
     condition     = length(cloudflare_ruleset.waf) == 0 && length(cloudflare_ruleset.cache) == 0 && length(cloudflare_ruleset.rate_limit) == 0
     error_message = "No WAF, cache or rate limit rules without the spec's cdn."
   }
+  assert {
+    condition     = cloudflare_zone_setting.browser_cache_ttl.value == 0
+    error_message = "Browsers keep what Cloudflare serves for the origin's Cache-Control, not Cloudflare's 4 hours."
+  }
 }
