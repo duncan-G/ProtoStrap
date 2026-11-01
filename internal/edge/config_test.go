@@ -209,6 +209,19 @@ func TestRoutes(t *testing.T) {
 	}
 }
 
+// The edge routes the path as RFC 3986 normalises it, without //, and asks the authorizer
+// about and sends the service that path, so a path can't take one route and be asked about
+// as another. A %2F or %5C is redirected to a slash.
+func TestTheListenerNormalisesPaths(t *testing.T) {
+	v := decode(t, Files(config(services()))["edge/lds.json"])
+	hcm := v["resources"].([]any)[0].(map[string]any)["filter_chains"].([]any)[0].(map[string]any)["filters"].([]any)[0].(map[string]any)["typed_config"].(map[string]any)
+	for field, want := range map[string]any{"normalize_path": true, "merge_slashes": true, "path_with_escaped_slashes_action": "UNESCAPE_AND_REDIRECT"} {
+		if got := hcm[field]; got != want {
+			t.Errorf("%s = %v, want %v", field, got, want)
+		}
+	}
+}
+
 func TestPathOnlyRoutesMatchEveryHost(t *testing.T) {
 	v := decode(t, Files(config(services()))["edge/lds.json"])
 	hosts := virtualHosts(t, v)
@@ -236,10 +249,19 @@ func virtualHosts(t *testing.T, lds map[string]any) map[string][]string {
 		m := vh.(map[string]any)
 		domain := m["domains"].([]any)[0].(string)
 		for _, r := range m["routes"].([]any) {
-			out[domain] = append(out[domain], r.(map[string]any)["match"].(map[string]any)["prefix"].(string))
+			out[domain] = append(out[domain], matchOf(r.(map[string]any)))
 		}
 	}
 	return out
+}
+
+// matchOf is what a route matches: its prefix, or ~ and its pattern.
+func matchOf(route map[string]any) string {
+	m := route["match"].(map[string]any)
+	if re, ok := m["safe_regex"].(map[string]any); ok {
+		return "~" + re["regex"].(string)
+	}
+	return m["prefix"].(string)
 }
 
 func TestNoServicesStillMakesValidFiles(t *testing.T) {

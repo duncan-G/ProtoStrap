@@ -692,6 +692,19 @@ var edgeHeaders = map[string]bool{"host": true, "content-length": true, "transfe
 var edgeResponseHeaders = map[string]bool{"content-length": true, "transfer-encoding": true, "connection": true,
 	"keep-alive": true, "proxy-connection": true, "te": true, "upgrade": true}
 
+// skipExtension is a file extension whose requests the edge sends on without asking the
+// authorizer, such as *.js.
+var skipExtension = regexp.MustCompile(`^\*\.[a-z0-9]{1,10}$`)
+
+const (
+	// maxAuthorizeTimeout keeps the edge's own 504 ahead of Cloudflare's: a route's 120s
+	// starts once the authorizer answers, and Cloudflare gives up at 125s.
+	maxAuthorizeTimeout = 5 * time.Second
+	// maxSkipExtensions keeps the pattern of a route's skipped extensions, about 300 in RE2's
+	// program size at 30 of 10 characters, within the 1000 the edge's Envoy compiles.
+	maxSkipExtensions = 30
+)
+
 // authorize checks the service that authorizes a component's requests at the edge.
 func (c *checker) authorize(comp *Component) {
 	a := comp.Authorize
@@ -734,6 +747,34 @@ func (c *checker) authorize(comp *Component) {
 				c.add(at, "the edge sets %s itself", name)
 			}
 		}
+	}
+	switch t := a.Timeout.Duration; {
+	case c.s.has(f(".timeout")) && t <= 0:
+		c.add(f(".timeout"), "must be above 0")
+	case t > maxAuthorizeTimeout:
+		c.add(f(".timeout"), "must be at most 5s: the edge gives the service 120s once the authorizer answers, and Cloudflare gives up at 125s")
+	}
+	extensions := 0
+	for i, skip := range a.Skip {
+		at := f(fmt.Sprintf(".skip[%d]", i))
+		if strings.HasPrefix(skip, "*.") {
+			if !skipExtension.MatchString(skip) {
+				c.add(at, "%q isn't a file extension: up to 10 lower-case letters and digits after *., such as *.js", skip)
+			}
+			extensions++
+			continue
+		}
+		switch clean := strings.TrimSuffix(path.Clean(skip), "/") + "/"; {
+		case !strings.HasPrefix(skip, "/") || !strings.HasSuffix(skip, "/"):
+			c.add(at, "%q isn't a path prefix that starts and ends with /, such as /assets/, or a file extension, such as *.js", skip)
+		case clean != skip:
+			c.add(at, "write it as %s", clean)
+		case len(comp.Routes) > 0 && !slices.ContainsFunc(comp.Routes, func(r Route) bool { return within(skip, r.Path) }):
+			c.add(at, "%s isn't under any of the service's routes", skip)
+		}
+	}
+	if extensions > maxSkipExtensions {
+		c.add(f(".skip"), "at most %d file extensions", maxSkipExtensions)
 	}
 }
 

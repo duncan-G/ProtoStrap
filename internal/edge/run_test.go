@@ -45,6 +45,14 @@ func TestBootstrapCapsConnectionsWithAResourceMonitor(t *testing.T) {
 	}
 }
 
+// Envoy compiles a pattern up to 1000 in RE2's program size, not 100, so 30 skipped
+// extensions fit in a route's pattern.
+func TestBootstrapRaisesRE2sLimit(t *testing.T) {
+	if b := Bootstrap("/etc/protostrap", 9901); !strings.Contains(b, `"re2.max_program_size.error_level": 1000`) {
+		t.Errorf("bootstrap keeps RE2's limit of 100:\n%s", b)
+	}
+}
+
 func TestTunnelToken(t *testing.T) {
 	tests := []struct {
 		secret, prefix, want string

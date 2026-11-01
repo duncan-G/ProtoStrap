@@ -847,6 +847,37 @@ internal sealed partial class SpecGenerator(
             else if (header is "content-length" or "transfer-encoding" or "connection" or "keep-alive" or "proxy-connection" or "te" or "upgrade")
                 Fail($"the edge sets {header} itself");
         }
+        string? timeout = null;
+        if (authorize.Timeout is { } wait)
+        {
+            timeout = Quantity.Duration(wait);
+            var shown = timeout ?? Quantity.Decimal(wait.TotalMilliseconds) + "ms";
+            if (wait <= TimeSpan.Zero)
+                Fail("timeout must be above 0");
+            else if (wait > TimeSpan.FromSeconds(5))
+                Fail($"timeout {shown} is more than 5s: the edge gives the service 120s once the authorizer answers, and Cloudflare gives up at 125s");
+            else if (timeout is null)
+                Fail($"timeout {shown} isn't a whole number of milliseconds");
+        }
+        var extensions = 0;
+        foreach (var skip in authorize.Skip)
+        {
+            if (skip.StartsWith("*.", StringComparison.Ordinal))
+            {
+                if (!SkipExtension().IsMatch(skip))
+                    Fail($"\"{skip}\" isn't a file extension: up to 10 lower-case letters and digits after *., such as *.js");
+                extensions++;
+            }
+            else if (!skip.StartsWith('/') || !skip.EndsWith('/'))
+                Fail($"\"{skip}\" isn't a path prefix that starts and ends with /, such as /assets/, or a file extension, such as *.js");
+            // The edge matches the path as RFC 3986 normalises it, which never has // or a dot segment.
+            else if (CleanPrefix(skip) is var clean && clean != skip)
+                Fail($"write {skip} as {clean}");
+            else if (settings.Routes.Count > 0 && !settings.Routes.Any(r => Within(skip, RoutePath(r.Route))))
+                Fail($"{skip} isn't under any of the service's routes");
+        }
+        if (extensions > 30)
+            Fail("skip has at most 30 file extensions");
         if (!ok)
             return null;
         var map = new YamlMap { ["by"] = by.Name };
@@ -858,7 +889,39 @@ internal sealed partial class SpecGenerator(
             map["forward"] = Seq(authorize.Forward);
         if (authorize.Respond.Count > 0)
             map["respond"] = Seq(authorize.Respond);
+        if (authorize.Open)
+            map["open"] = YamlScalar.Bool(true);
+        if (timeout is not null)
+            map["timeout"] = timeout;
+        if (authorize.Skip.Count > 0)
+            map["skip"] = Seq(authorize.Skip);
         return map;
+    }
+
+    /// <summary>RoutePath is a route's path, such as /api/ of app/api/, which is / of app.</summary>
+    private static string RoutePath(string route)
+    {
+        var path = route.StartsWith('/') ? route : route[route.Split('/')[0].Length..];
+        return path.Length > 0 ? path : "/";
+    }
+
+    /// <summary>CleanPrefix writes a path prefix as Go's path.Clean would, ending in /.</summary>
+    private static string CleanPrefix(string prefix)
+    {
+        var segments = new List<string>();
+        foreach (var segment in prefix.Split('/'))
+        {
+            if (segment == "..")
+            {
+                if (segments.Count > 0)
+                    segments.RemoveAt(segments.Count - 1);
+            }
+            else if (segment is not ("" or "."))
+            {
+                segments.Add(segment);
+            }
+        }
+        return segments.Count == 0 ? "/" : "/" + string.Join('/', segments) + "/";
     }
 
     /// <summary>WaitFor is depends_on, and WaitForCompletion of a task is migrate.</summary>
@@ -1691,6 +1754,9 @@ internal sealed partial class SpecGenerator(
 
     [GeneratedRegex("^[a-z0-9!#$%&'*+.^_|~-]+$")]
     private static partial Regex HeaderName();
+
+    [GeneratedRegex(@"^\*\.[a-z0-9]{1,10}$")]
+    private static partial Regex SkipExtension();
 
     [GeneratedRegex("^[A-Z][A-Za-z0-9]*_$")]
     private static partial Regex Prefix();

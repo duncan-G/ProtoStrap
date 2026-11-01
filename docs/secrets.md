@@ -71,8 +71,8 @@ finds on its own. It keeps the keys that start with `SECRET_PREFIX` and the `Sha
 ones, drops the prefixes, and lets its own keys win. The sample's
 [.NET](../sample/services/dotnet/Shared/ProtoStrapHosting.cs) and
 [Python](../sample/services/py/main.py) services each do this in about 20 lines. Under
-`aspire run`, the AppHost sets the same keys, without prefixes, as environment variables,
-with their values from dev's secret (see [Dev](#dev)).
+`aspire run`, a service reads dev's secret the same way, with the developer's sign-in (see
+[Dev](#dev)).
 
 A service reads its keys only when it starts. When they change, ProtoStrap replaces its
 replicas, a quarter at a time, as a release does. Each new replica reads everything again,
@@ -103,28 +103,32 @@ For them, the agent reads the keys and writes each one listed in `secrets` to a 
 ## Dev
 
 Dev is the local run, `aspire run`, and its values live in dev's secret, `<app>/dev`, beside
-prod's in the application's account and with the same keys. With `WithDevSecret()` on the
-ProtoStrap environment (ProtoStrap.Hosting), the AppHost reads it before it starts anything,
-and gives every parameter a component takes the value of the key the component reads in an
-account: its prefix and the variable's name, such as `Keycloak_KC_BOOTSTRAP_ADMIN_CLIENT_SECRET`,
-or the `Shared_` one. Generated parameters, PostgreSQL's and Redis's passwords included, take
-it too rather than making one. Components get their values as environment variables, as they
-always do under `aspire run`: only the AppHost reads the secret.
+prod's in the application's account and with the same key names. Components read it the way
+they read prod's: only where it lives, and who reads it, differ. Under `aspire run` the
+ProtoStrap environment (ProtoStrap.Hosting) gives every process a component runs the variables
+a replica gets, `SECRET_ID` (`<app>/dev`), `SECRET_PREFIX` and `AWS_REGION`, and `AWS_PROFILE`,
+the developer's AWS SSO profile (the AppHost's, or `developer`), in place of the component's
+role. The SDK's default chain finds the profile as it finds the role in an account, so the
+same code reads it.
 
-- **Signing in.** The AppHost reads it with the AWS CLI v2 and an SSO profile, `developer`
-  unless `WithDevSecret` names another, made once with `aws configure sso --profile developer`
-  and the Developer permission set. When the profile's session is missing or expired, the
-  AppHost runs `aws sso login` first. The region is `AWS_REGION`, or the profile's.
-- **A missing key stops the run,** and the AppHost names each one. A parameter two components
-  take must have the same value under both keys.
-- **Connection strings stay Aspire's,** which point at the local PostgreSQL and the rest. Dev's
-  secret needs none, and any it has go unused.
+- **Sign in first,** with `aws sso login --profile developer`, an SSO profile made once with
+  `aws configure sso --profile developer` and the Developer permission set. Without a session,
+  a service fails at startup with the SDK's error. A .NET service needs `AWSSDK.SSO` and
+  `AWSSDK.SSOOIDC` for an SSO profile.
+- **The region** is the AppHost's `AWS_REGION`, which LocalStack uses too: set it to the
+  account's, where dev's secret is.
+- **Don't give a process LocalStack's test keys.** Environment keys win over `AWS_PROFILE`, so
+  the process would read dev's secret with them. LocalStack takes the developer's credentials
+  as its one account, `000000000000`. Containers, which have no sign-in, keep test keys.
+- **Containers read nothing from it.** An image that takes secret files in an account, such as
+  PostgreSQL or Keycloak, is a local resource under `aspire run`, and takes Aspire's parameters,
+  generated and kept in the AppHost's user secrets, as connection strings do. Dev's secret
+  holds none of their keys: a process that shares one, such as a client secret, would take the
+  secret's value over Aspire's.
 - **Developers make it once,** with `aws secretsmanager create-secret --name <app>/dev`, and
   fill it with `scripts/set-secret.sh` or the application's own script. Nothing deployed reads
-  it, and no workflow touches it.
-
-Without `WithDevSecret`, parameters take their values as Aspire gives them: from user secrets,
-or generated.
+  it, and no workflow touches it. A component reads it when it starts: restart one to take a
+  new value.
 
 ## Changing a value
 

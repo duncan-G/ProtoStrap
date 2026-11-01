@@ -79,7 +79,8 @@ func TestRoutingIsJSON(t *testing.T) {
 	  "services": [
 	    { "name": "api", "port": 8080, "ready": "grpc", "protocol": "grpc", "address": "host.docker.internal:51234",
 	      "routes": [ { "host": "admin", "path": "/api/", "rate": 50 } ],
-	      "authorize": { "by": "auth", "path": "/auth/check", "headers": ["x-user"], "forward": ["cookie"], "respond": ["set-cookie"] } },
+	      "authorize": { "by": "auth", "path": "/auth/check", "headers": ["x-user"], "forward": ["cookie"], "respond": ["set-cookie"],
+	        "open": true, "timeout": "500ms", "skip": ["/api/assets/", "*.js"] } },
 	    { "name": "auth", "port": 8080, "ready": "/healthz", "health_port": 51300, "address": "host.docker.internal:51300" }
 	  ]
 	}`
@@ -90,7 +91,8 @@ func TestRoutingIsJSON(t *testing.T) {
 	api := r.Services[0]
 	if r.Listen != "0.0.0.0:10000" || r.Hosts["admin"] != "admin.dev.localhost" || api.Address != "host.docker.internal:51234" ||
 		api.Routes[0] != (Route{Host: "admin", Path: "/api/", Rate: 50}) || api.Authorize.By != "auth" || r.Services[1].HealthPort != 51300 ||
-		!slices.Equal(api.Authorize.Respond, []string{"set-cookie"}) {
+		!slices.Equal(api.Authorize.Respond, []string{"set-cookie"}) || !api.Authorize.Open || api.Authorize.Timeout != "500ms" ||
+		!slices.Equal(api.Authorize.Skip, []string{"/api/assets/", "*.js"}) {
 		t.Errorf("routing %+v", r)
 	}
 }
@@ -103,13 +105,14 @@ func TestEnvoyAcceptsTheLocalEdge(t *testing.T) {
 	}
 	dir := t.TempDir()
 	// It logs each request, and api and web are authorized, one with a header forwarded and
-	// a cookie for the client.
+	// a cookie for the client, the other open, with its static files skipped.
 	r := local()
 	r.Local = true
 	r.Services = append(r.Services, Service{Name: "auth", Port: 8080, Ready: "/healthz", Routes: []Route{{Host: "admin", Path: "/auth/"}},
 		Address: "host.docker.internal:51300"})
 	r.Services[0].Authorize = &Authorize{By: "auth", Path: "/auth/check", Headers: []string{"x-identity"}, Forward: []string{"cookie"}, Respond: []string{"set-cookie"}}
-	r.Services[2].Authorize = &Authorize{By: "auth", Path: "/auth/check", Headers: []string{"x-identity"}}
+	r.Services[2].Authorize = &Authorize{By: "auth", Path: "/auth/check", Headers: []string{"x-identity"}, Open: true, Timeout: "500ms",
+		Skip: []string{"/assets/", "*.js", "*.css"}}
 	if err := WriteLocal(dir, r); err != nil {
 		t.Fatal(err)
 	}

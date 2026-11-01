@@ -119,7 +119,7 @@ or bucket may be called `email`. How to send is the protostrap-email skill.
 | `port`             | service, stateful         | The port it listens on                                              |
 | `ready`            | service                   | `grpc`, or an HTTP path such as `/healthz`                          |
 | `routes`           | service                   | A host's name and a path prefix (`shop/api/`), or a path for every host (`/api/`), or `{ route, rate }` |
-| `authorize`        | service                   | `{ by, path, headers, forward, respond }`: a service the edge asks about each request to this one's routes first |
+| `authorize`        | service                   | `{ by, path, headers, forward, respond, open, timeout, skip }`: a service the edge asks about each request to this one's routes first. `open: true` sends on what it can't answer for; `timeout` default 2 s, at most 5 s; `skip` lists prefixes under the routes (`/assets/`) and quoted extensions (`"*.js"`, up to 30) it isn't asked about |
 | `metrics`          | all                       | `<port>/<path>` of a Prometheus endpoint, such as `9090/metrics`    |
 | `depends_on`       | all                       | Components with a ready replica before this one starts              |
 | `uses`             | all                       | Queues, buckets, `files`, `backups`, `email`. Builds its IAM role   |

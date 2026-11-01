@@ -109,7 +109,7 @@ match:
   and dev's secret. Dev is the local run, so it has no account: its secret, `<app>/dev`,
   named like every environment's, sits beside prod's, `<app>/prod`. No Terraform makes it:
   Developers create it once (`aws secretsmanager create-secret --name <app>/dev`), fill it
-  with `scripts/set-secret.sh`, and their AppHost reads it with their sign-in
+  with `scripts/set-secret.sh`, and their services read it with their sign-in
   ([Dev](secrets.md#dev)). Nothing is deployed for dev,
   and no workflow touches its secret. ProtoStrap names its resources on the assumption of
   one application per account, so a second application gets an account of its own, as

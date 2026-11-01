@@ -7,6 +7,7 @@ using Aspire.Hosting;
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.Eventing;
 using Microsoft.Extensions.Logging.Abstractions;
+using ProtoStrap.Hosting.Spec;
 
 namespace ProtoStrap.Hosting;
 
@@ -214,7 +215,8 @@ internal static class LocalEdge
                 settings.Routes.Count == 0 ? null : settings.Routes.Select(Route).ToList(),
                 settings.Authorize is { } a
                     ? new RoutedAuthorize(a.By.Name, a.Path is { Length: > 0 } p && p != "/" ? p : null, a.Headers.Count > 0 ? a.Headers : null,
-                        a.Forward.Count > 0 ? a.Forward : null, a.Respond.Count > 0 ? a.Respond : null)
+                        a.Forward.Count > 0 ? a.Forward : null, a.Respond.Count > 0 ? a.Respond : null,
+                        a.Open ? true : null, a.Timeout is { } t ? Quantity.Duration(t) : null, a.Skip.Count > 0 ? a.Skip : null)
                     : null,
                 address, healthPort));
         }
@@ -314,5 +316,6 @@ internal static class LocalEdge
     private sealed record RoutedRoute(string? Host, string Path, double? Rate);
 
     private sealed record RoutedAuthorize(
-        string By, string? Path, IReadOnlyList<string>? Headers, IReadOnlyList<string>? Forward, IReadOnlyList<string>? Respond);
+        string By, string? Path, IReadOnlyList<string>? Headers, IReadOnlyList<string>? Forward, IReadOnlyList<string>? Respond,
+        bool? Open, string? Timeout, IReadOnlyList<string>? Skip);
 }

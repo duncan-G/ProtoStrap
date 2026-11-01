@@ -82,8 +82,14 @@ func Bootstrap(filesDir string, adminPort int) string {
 				"max_active_downstream_connections": 50000,
 			},
 		}}},
+		"layered_runtime": envoyRuntime,
 	})
 }
+
+// envoyRuntime lets Envoy compile a pattern up to 1000 in RE2's program size, not 100: the
+// pattern of a route's skipped extensions, up to 30 of 10 characters, can pass 100, and Envoy
+// refuses a listener with a larger pattern than its limit.
+var envoyRuntime = obj{"layers": []any{obj{"name": "static", "static_layer": obj{"re2.max_program_size.error_level": 1000}}}}
 
 // tunnelToken reads the token from the environment's secret: its key TUNNEL_TOKEN under the
 // edge's prefix, Edge_TUNNEL_TOKEN. With no prefix, from an agent older than the

@@ -2,7 +2,8 @@
 
 Working versions of all of this are in ProtoStrap's `sample/services/dotnet` (`Shared/ProtoStrapHosting.cs`,
 `Api/Drain.cs`, `Worker/JobRunner.cs`). Packages: `AWSSDK.SecretsManager`, `AWSSDK.SQS`,
-`AWSSDK.S3`, and `Grpc.HealthCheck` for gRPC readiness.
+`AWSSDK.S3`, `AWSSDK.SSO` and `AWSSDK.SSOOIDC` for `aspire run`'s `AWS_PROFILE`, and
+`Grpc.HealthCheck` for gRPC readiness.
 
 ## Keys into configuration
 

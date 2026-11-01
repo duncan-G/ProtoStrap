@@ -68,9 +68,8 @@ added to the model in run mode, so `aspire run` is unchanged.
 
 | Call                                          | Becomes                                                                 |
 | --------------------------------------------- | ----------------------------------------------------------------------- |
-| `AddProtoStrapEnvironment(name, app)`         | `app`, and with `WithVersion`, `WithHost`, `With*Pool` and `WithEdge`, the rest of the spec's top |
+| `AddProtoStrapEnvironment(name, app)`         | `app`, and with `WithVersion`, `WithHost`, `With*Pool` and `WithEdge`, the rest of the spec's top; under `aspire run`, every component's process gets `SECRET_ID` (`<app>/dev`), `SECRET_PREFIX`, `AWS_REGION` and `AWS_PROFILE`, and reads dev's secret as in an account ([docs/secrets.md](../docs/secrets.md#dev)) |
 | `.WithHost(name, hostname, local)`            | An entry in `hosts`, which routes name as `name/`; under `aspire run`, every resource's `HOST_<NAME>` and `ORIGIN_<NAME>` for the local hostname |
-| `.WithDevSecret(profile)`                     | Nothing in the spec; under `aspire run`, every parameter a component takes gets its value from dev's secret, `<app>/dev`, by the key it reads in an account, after an AWS SSO sign-in ([docs/secrets.md](../docs/secrets.md#dev)) |
 | `PublishAsProtoStrapService(...)`             | `kind: service`: `Pool`, `Request`, `Routes`/`Route`, `Ready`, `Metrics`, `Stop`, `Scale`, `SecretFiles` |
 | `PublishAsProtoStrapWorker(...)`              | `kind: worker`: `Pool`, `Request`, `Metrics`, `Stop`, `Scale`, `SecretFiles` |
 | `PublishAsProtoStrapStateful(...)`            | `kind: stateful`: `Vm`, `Request`, `Volume`, `Backup`, `Command`, `Metrics`, `Stop`, `SecretFiles` |
@@ -81,7 +80,7 @@ added to the model in run mode, so `aspire run` is unchanged.
 | `AddProtoStrapFiles(name)`                    | The files bucket                                                        |
 | `AddProtoStrapEmail(name, domains)`           | The `email` section: the domains the application sends mail from with SES ([Email](../docs/email.md)) |
 | `.WithReference(queue)`, `.WithReference(bucket)`, `.WithReference(files)`, `.WithReference(email)` | `uses`, without the queue the component's own `Queue(...)` signal reads |
-| `.Authorize(auth, path, headers, forward, respond)` | `authorize`: the service the edge asks about each request to this one's routes first ([Authorizing requests](../docs/protostrap.md#authorizing-requests)) |
+| `.Authorize(auth, path, headers, forward, respond, open, timeout, skip)` | `authorize`: the service the edge asks about each request to this one's routes first; with `open: true` the edge sends on a request it can't answer for, `timeout` is how long it waits, up to 5 seconds, and `skip`'s prefixes and extensions, such as `/assets/` and `*.js`, aren't asked about ([Authorizing requests](../docs/protostrap.md#authorizing-requests)) |
 | `.WithProtoStrapSources(pathspecs)`           | More `sources`, for inputs the build can't show, such as generated protobuf code |
 | `.WithProtoStrapConfig(source, target)`       | `config: { from, path }`: a directory of the repository mounted read-only in each replica, and a read-only bind mount of it under `aspire run` ([Config files](../docs/config.md)) |
 | `.OnConfigChange(ConfigChange.Reload)`, `ConfigChange.Run(...)` | `on_config_change`: how a service, worker or stateful component takes new config files |

@@ -11,9 +11,11 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/duncan-G/protostrap/internal/probe"
 )
@@ -63,6 +65,42 @@ type Authorize struct {
 	// Respond are the authorizer's response headers added to the service's response when
 	// it lets the request through, each value a header of its own.
 	Respond []string `json:"respond,omitempty"`
+	// Open sends a request the authorizer can't answer for on, without Headers, rather than
+	// answering 503: no ready replica, no connection, no answer within Timeout, or a 5xx.
+	Open bool `json:"open,omitempty"`
+	// Timeout is how long the edge waits for the authorizer, a Go duration such as 500ms.
+	// Empty is 2s.
+	Timeout string `json:"timeout,omitempty"`
+	// Skip are the requests sent on without asking the authorizer: path prefixes such as
+	// /assets/, and file extensions such as *.js. Headers are still removed from them.
+	Skip []string `json:"skip,omitempty"`
+}
+
+// defaultAuthorizeTimeout is how long the edge waits for an authorizer without a Timeout.
+const defaultAuthorizeTimeout = 2 * time.Second
+
+// timeout is how long the edge waits for the authorizer, as Envoy writes a duration.
+func (a *Authorize) timeout() string {
+	d, err := time.ParseDuration(a.Timeout)
+	if err != nil || d <= 0 {
+		d = defaultAuthorizeTimeout
+	}
+	return strconv.FormatFloat(d.Seconds(), 'f', -1, 64) + "s"
+}
+
+// skipped are the authorizer's Skip prefixes, and its Skip extensions without their *.,
+// sorted, each once.
+func (a *Authorize) skipped() (prefixes, extensions []string) {
+	for _, s := range a.Skip {
+		if ext, ok := strings.CutPrefix(s, "*."); ok {
+			extensions = append(extensions, ext)
+		} else {
+			prefixes = append(prefixes, s)
+		}
+	}
+	slices.Sort(prefixes)
+	slices.Sort(extensions)
+	return slices.Compact(prefixes), slices.Compact(extensions)
 }
 
 // EnvoyImage is the Envoy the edge runs, which `aspire run` runs as the local edge too.
@@ -175,6 +213,10 @@ type routeEntry struct {
 	grpcWeb bool
 	// authorize is the service's authorizer, or nil.
 	authorize *Authorize
+	// skipped says the authorizer isn't asked about the route's requests. regex, if set,
+	// matches them in place of Path.
+	skipped bool
+	regex   string
 }
 
 // authzFilter is the name of the ext_authz filter that asks about a service's requests.
@@ -211,7 +253,7 @@ func authzFilters(services []Service) []any {
 			response["allowed_client_headers_on_success"] = patterns(a.Respond)
 		}
 		httpService := obj{
-			"server_uri":             obj{"uri": fmt.Sprintf("http://%s:%d", a.By, port), "cluster": a.By, "timeout": "2s"},
+			"server_uri":             obj{"uri": fmt.Sprintf("http://%s:%d", a.By, port), "cluster": a.By, "timeout": a.timeout()},
 			"authorization_response": response,
 		}
 		if p := strings.TrimSuffix(a.Path, "/"); p != "" {
@@ -221,9 +263,13 @@ func authzFilters(services []Service) []any {
 			"@type":                 "type.googleapis.com/envoy.extensions.filters.http.ext_authz.v3.ExtAuthz",
 			"transport_api_version": "V3",
 			"http_service":          httpService,
-			// A request the authorizer can't answer for isn't let through.
-			"failure_mode_allow": false,
-			"status_on_error":    obj{"code": "ServiceUnavailable"},
+			// A request the authorizer can't answer for isn't let through, unless it's open:
+			// then it goes on without the authorizer's headers, the client's copies of which
+			// the header mutation has already removed.
+			"failure_mode_allow": a.Open,
+		}
+		if !a.Open {
+			authz["status_on_error"] = obj{"code": "ServiceUnavailable"}
 		}
 		// Envoy sends an HTTP authorizer Authorization, Host, Method, Path and Content-Length
 		// without asking; these are the others. Unset, it sends no others.
@@ -253,7 +299,7 @@ func listener(services []Service, cfg Routing) obj {
 	var everyHost []routeEntry
 	for _, s := range services {
 		for _, r := range s.Routes {
-			e := routeEntry{r, s.Name, s.protocol() == "grpc", s.Authorize}
+			e := routeEntry{Route: r, service: s.Name, grpcWeb: s.protocol() == "grpc", authorize: s.Authorize}
 			if r.Host == "" {
 				everyHost = append(everyHost, e)
 			} else if hostname := hosts[r.Host]; hostname != "" {
@@ -271,9 +317,15 @@ func listener(services []Service, cfg Routing) obj {
 		"@type":       "type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager",
 		"stat_prefix": "edge",
 		// cloudflared is the only client, so the address Cloudflare passes is trusted.
-		"use_remote_address":           false,
-		"common_http_protocol_options": obj{"idle_timeout": "300s"},
-		"route_config":                 obj{"name": "routes", "virtual_hosts": vhosts},
+		"use_remote_address": false,
+		// Routes match the path as RFC 3986 normalises it, without //, and the authorizer is
+		// asked about and the service gets that path, so /theplot/../x can't take one route
+		// and be asked about as another. A %2F or %5C is redirected to a slash.
+		"normalize_path":                   true,
+		"merge_slashes":                    true,
+		"path_with_escaped_slashes_action": "UNESCAPE_AND_REDIRECT",
+		"common_http_protocol_options":     obj{"idle_timeout": "300s"},
+		"route_config":                     obj{"name": "routes", "virtual_hosts": vhosts},
 		"http_filters": slices.Concat(
 			// A route's rate limit comes first, so it protects the authorizer too.
 			[]any{obj{"name": "envoy.filters.http.local_ratelimit", "typed_config": obj{
@@ -312,17 +364,14 @@ var localAccessLog = obj{"name": "envoy.access_loggers.stdout", "typed_config": 
 }}
 
 func virtualHost(host string, routes []routeEntry) obj {
-	routes = slices.Clone(routes)
-	slices.SortStableFunc(routes, func(a, b routeEntry) int {
-		if d := len(b.Path) - len(a.Path); d != 0 {
-			return d
-		}
-		return strings.Compare(a.Path, b.Path)
-	})
 	var rs []any
-	for _, r := range routes {
+	for _, r := range withSkips(routes) {
+		match := obj{"prefix": r.Path}
+		if r.regex != "" {
+			match = obj{"safe_regex": obj{"regex": r.regex}}
+		}
 		route := obj{
-			"match": obj{"prefix": r.Path},
+			"match": match,
 			"route": obj{
 				"cluster": r.service,
 				// Cloudflare gives up on a response that takes 125 seconds to start.
@@ -360,9 +409,11 @@ func virtualHost(host string, routes []routeEntry) obj {
 					"mutations": obj{"request_mutations": removals},
 				}
 			}
-			perFilter[authzFilter(r.service)] = obj{
-				"@type":          "type.googleapis.com/envoy.extensions.filters.http.ext_authz.v3.ExtAuthzPerRoute",
-				"check_settings": obj{},
+			if !r.skipped {
+				perFilter[authzFilter(r.service)] = obj{
+					"@type":          "type.googleapis.com/envoy.extensions.filters.http.ext_authz.v3.ExtAuthzPerRoute",
+					"check_settings": obj{},
+				}
 			}
 		}
 		if len(perFilter) > 0 {
@@ -380,6 +431,62 @@ func virtualHost(host string, routes []routeEntry) obj {
 		domains = append(domains, host+":*")
 	}
 	return obj{"name": host, "domains": domains, "routes": rs}
+}
+
+// longestFirst orders a host's routes as Envoy must try them: longest prefix first, and of
+// one prefix, the route that skips the authorizer.
+func longestFirst(a, b routeEntry) int {
+	if d := len(b.Path) - len(a.Path); d != 0 {
+		return d
+	}
+	if d := strings.Compare(a.Path, b.Path); d != 0 {
+		return d
+	}
+	switch {
+	case a.skipped && !b.skipped:
+		return -1
+	case b.skipped && !a.skipped:
+		return 1
+	}
+	return 0
+}
+
+// withSkips is a host's routes in the order Envoy tries them, longest prefix first, with the
+// routes whose requests the authorizer isn't asked about. Neither kind takes a request from
+// another route: a skipped prefix is added only where the route it's under gets its requests,
+// and a route's pattern for its skipped extensions comes just before it, after every longer
+// prefix. Each is a route of its own, so it counts its own rate limit.
+func withSkips(routes []routeEntry) []routeEntry {
+	routes = slices.Clone(routes)
+	slices.SortStableFunc(routes, longestFirst)
+	all := slices.Clone(routes)
+	for i, r := range routes {
+		if r.authorize == nil {
+			continue
+		}
+		prefixes, _ := r.authorize.skipped()
+		for _, p := range prefixes {
+			if first := slices.IndexFunc(routes, func(o routeEntry) bool { return strings.HasPrefix(p, o.Path) }); first == i {
+				s := r
+				s.Path, s.skipped = p, true
+				all = append(all, s)
+			}
+		}
+	}
+	slices.SortStableFunc(all, longestFirst)
+	var out []routeEntry
+	for _, r := range all {
+		if r.authorize != nil && !r.skipped {
+			if _, extensions := r.authorize.skipped(); len(extensions) > 0 {
+				s := r
+				// Envoy matches it against the path without the query, which [^?] would keep out.
+				s.skipped, s.regex = true, "^"+regexp.QuoteMeta(r.Path)+`[^?]*\.(?:`+strings.Join(extensions, "|")+`)$`
+				out = append(out, s)
+			}
+		}
+		out = append(out, r)
+	}
+	return out
 }
 
 // clusters is one cluster per routed service. Each cluster finds the service's replicas by

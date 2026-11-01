@@ -1,8 +1,6 @@
 using System.Globalization;
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.Pipelines;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
 using ProtoStrap.Hosting;
 using ProtoStrap.Hosting.Spec;
 
@@ -18,7 +16,9 @@ public static class ProtoStrapEnvironmentExtensions
     /// AddProtoStrapEnvironment adds the ProtoStrap environment. In publish mode it is the compute
     /// environment of every compute resource not assigned to another, and its protostrap-spec
     /// step, which `aspire publish` runs and `aspire do protostrap-spec` runs alone, writes
-    /// protostrap.yaml. In run mode it does nothing.
+    /// protostrap.yaml. Under `aspire run` the environment is dev, and every process a component
+    /// runs reads dev's secret, &lt;app&gt;/dev, as a replica reads its environment's
+    /// (docs/secrets.md#dev).
     /// </summary>
     /// <param name="builder">It is the AppHost's builder.</param>
     /// <param name="name">It is the environment's resource name.</param>
@@ -29,7 +29,16 @@ public static class ProtoStrapEnvironmentExtensions
         ArgumentNullException.ThrowIfNull(builder);
         var environment = new ProtoStrapEnvironmentResource(name, app) { AppHostDirectory = builder.AppHostDirectory };
         if (!builder.ExecutionContext.IsPublishMode)
+        {
+            var configuration = builder.Configuration;
+            builder.Eventing.Subscribe<BeforeStartEvent>((e, _) =>
+            {
+                var profile = configuration["AWS_PROFILE"] is { Length: > 0 } named ? named : "developer";
+                AddSecretVariables(e.Model.Resources, app + "/dev", profile, LocalStack.Region(configuration));
+                return Task.CompletedTask;
+            });
             return builder.CreateResourceBuilder(environment);
+        }
 
         return builder.AddResource(environment)
             .ExcludeFromManifest()
@@ -78,29 +87,30 @@ public static class ProtoStrapEnvironmentExtensions
     }
 
     /// <summary>
-    /// WithDevSecret has `aspire run` give every parameter a component takes its value from dev's
-    /// secret, &lt;app&gt;/dev, by the key the component reads in an account: its prefix and the
-    /// variable's name, or the Shared_ one (docs/secrets.md#dev). Generated parameters take it too,
-    /// rather than making one. The AppHost reads the secret with the AWS CLI and an SSO profile with
-    /// the Developer permission set, signing in with `aws sso login` when the profile's session is
-    /// missing or expired, and stops, naming each key, if one is missing. Components get their values
-    /// as they always do under `aspire run`, and connection strings stay Aspire's local ones. In
-    /// publish mode it does nothing.
+    /// AddSecretVariables gives every process a ProtoStrap component runs under `aspire run` the
+    /// variables ProtoStrap gives each replica for its environment's secret: its id, the
+    /// component's prefix (its secret_prefix, or its name in PascalCase and _), and the region,
+    /// the AppHost's, which LocalStack uses too. AWS_PROFILE, the AppHost's or developer, the
+    /// Developer permission set's, stands in for the replica's role. Containers have no sign-in,
+    /// so they get none: an image that takes secret files in an account takes Aspire's
+    /// parameters locally.
     /// </summary>
-    /// <param name="builder">It is the environment.</param>
-    /// <param name="profile">It is the AWS profile the AppHost signs in with, developer by default.</param>
-    public static IResourceBuilder<ProtoStrapEnvironmentResource> WithDevSecret(
-        this IResourceBuilder<ProtoStrapEnvironmentResource> builder, string profile = DevSecret.DefaultProfile)
+    internal static void AddSecretVariables(IEnumerable<IResource> resources, string secret, string profile, string region)
     {
-        ArgumentException.ThrowIfNullOrEmpty(profile);
-        if (builder.ApplicationBuilder.ExecutionContext.IsPublishMode)
-            return builder;
-        var configuration = builder.ApplicationBuilder.Configuration;
-        var secret = new DevSecret { App = builder.Resource.App, Profile = profile, Variable = name => configuration[name] };
-        builder.ApplicationBuilder.Eventing.Subscribe<BeforeStartEvent>((e, cancellationToken) =>
-            secret.ApplyAsync(e.Model.Resources, e.Services.GetRequiredService<DistributedApplicationExecutionContext>(), configuration,
-                e.Services.GetRequiredService<ILoggerFactory>().CreateLogger("ProtoStrap.DevSecret"), cancellationToken));
-        return builder;
+        foreach (var resource in resources.Where(r => r is IResourceWithEnvironment and not ContainerResource).ToList())
+        {
+            if (!resource.TryGetLastAnnotation<ProtoStrapComponentAnnotation>(out var component))
+                continue;
+            var prefix = component.Configure().SecretPrefix ?? string.Concat(resource.Name.Split('-', StringSplitOptions.RemoveEmptyEntries)
+                .Select(part => char.ToUpperInvariant(part[0]) + part[1..])) + "_";
+            resource.Annotations.Add(new EnvironmentCallbackAnnotation(context =>
+            {
+                context.EnvironmentVariables["SECRET_ID"] = secret;
+                context.EnvironmentVariables["SECRET_PREFIX"] = prefix;
+                context.EnvironmentVariables["AWS_PROFILE"] = profile;
+                context.EnvironmentVariables["AWS_REGION"] = region;
+            }));
+        }
     }
 
     /// <summary>

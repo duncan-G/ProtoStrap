@@ -351,24 +351,54 @@ sign-in service that knows each session:
     authorize: { by: auth, path: /auth/check, headers: [x-user], forward: [cookie], respond: [set-cookie] }
 ```
 
+A client whose static files anyone can fetch, and whose pages are served anonymously while
+`auth` can't answer, is authorized like this:
+
+```yaml
+  clients:
+    routes: [admin/]
+    authorize: { by: auth, headers: [x-user], forward: [cookie], open: true, timeout: 500ms, skip: [/assets/, "*.js", "*.css"] }
+```
+
 - **The edge asks `by`** on its port, at `path` followed by the request's own path, with
   the request's method and headers but not its body: `Authorization` always, and the
   headers in `forward`. `path` defaults to none, so the authorizer is asked for the
   request's own path.
-- **A 2xx lets the request through,** with the authorizer's response headers named in
+- **A 200 lets the request through,** with the authorizer's response headers named in
   `headers` added to it. Anything else is the client's response, status, headers and body,
-  so the authorizer can answer 401, or redirect to a sign-in page.
+  so the authorizer can answer 401, or redirect to a sign-in page. That includes every
+  other 2xx: a 204 reaches the client as a 204, and the service never sees the request.
 - **The service can trust `headers`:** the edge removes the client's own copies of them
   before it asks, so only the authorizer's arrive. A request the authorizer lets through
   without them arrives without them.
-- **A 2xx can answer the client too,** with the authorizer's response headers named in
+- **A 200 can answer the client too,** with the authorizer's response headers named in
   `respond` added to the service's response, such as a `set-cookie` for a session it
   renewed. Each is a header of its own, after the service's: two cookies stay two, and of
-  a cookie both set, the browser keeps the authorizer's. No other header of a 2xx reaches
+  a cookie both set, the browser keeps the authorizer's. No other header of a 200 reaches
   the client. `respond` can't name `content-length` or a header of one connection, such as
   `connection` or `transfer-encoding`: the edge sets those itself.
-- **An authorizer that doesn't answer** within 2 seconds, or isn't ready, gets the client a
-  503. The edge never lets a request through unasked.
+- **An authorizer that can't answer** gets the client a 503: one with no ready replica, one
+  the edge can't connect to, one that answers a 5xx, and one that doesn't answer within
+  `timeout`. `timeout` is 2 seconds unless set, such as `500ms`, and at most 5: the
+  service's 120 seconds start once the authorizer answers, and Cloudflare gives up at 125.
+- **`open: true` sends those requests on instead,** without the authorizer's `headers`, as
+  requests the service may serve anonymously. The client's own copies are removed first,
+  as always, so the service sees no identity at all. A 5xx's headers are dropped too.
+- **`skip` sends some requests on without asking:** path prefixes under the service's
+  routes, such as `/assets/`, and file extensions, such as `"*.js"`, quoted since a plain
+  `*` starts a YAML alias. A skipped request still has the client's copies of `headers`
+  removed, and is otherwise the route's request, with its timeout, gRPC-Web and `rate`,
+  though the skipped prefixes and extensions each count their own `rate`. An extension is
+  up to 10 lower-case letters and digits, matched as written, so `/X.JS` is asked about;
+  `skip` takes up to 30.
+- **A skip is only its own service's.** With `clients` as above and `console` on
+  `admin/theplot/` skipping nothing, `/x.js` and `/assets/a.png` reach `clients` unasked,
+  and `/theplot/x.js` reaches `console`, asked. A prefix under another service's longer
+  route, such as `/theplot/assets/` for `clients`, is never skipped.
+- **Nothing else goes through unasked.**
+- **The authorizer is asked about the path the request takes.** The edge normalises each
+  path before it routes it ([Edge](#edge)), so `/theplot/../x` and `/theplot/%2e%2e/x` take
+  the route for `/x`, and are asked about and sent on as `/x`.
 - **Only the routes of the service that names it** are authorized. The authorizer's own
   routes, such as its sign-in pages, aren't, unless it names another. It needs no routes
   to be asked.
@@ -590,7 +620,11 @@ what a component depends on.
   `127.0.0.1`. The tunnel's and Cloudflare's settings are in
   [Requests in](network.md#requests-in).
 - **Envoy:**
+  - normalises each request's path as RFC 3986 does, `/a/../b` to `/b` and `%2e` to `.`,
+    and merges `//` into `/`, so a route, its authorizer and its service all see one path.
+    A path with `%2F` or `%5C` gets a 307 to the same path with `/` in its place;
   - matches each request's host and path to a service, from the spec's `routes`;
+  - asks a route's [authorizer](#authorizing-requests) about the request first;
   - finds a service's replicas by looking up its name on the overlay every 5 seconds;
   - sends requests only to replicas that pass their `ready` check, on whichever port it names, and balances each
     request, not each connection, so gRPC spreads across replicas;
