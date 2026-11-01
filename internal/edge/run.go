@@ -17,6 +17,10 @@ import (
 	"github.com/duncan-G/protostrap/internal/secret"
 )
 
+// EnvTunnel is the edge's variable that the scheduler sets to off when the spec has a
+// gateway and no tunnel: the edge then runs Envoy alone.
+const EnvTunnel = "EDGE_TUNNEL"
+
 // Config is how `protostrap edge` runs the edge's two programs.
 type Config struct {
 	// Envoy is Envoy's binary.
@@ -36,7 +40,7 @@ type Config struct {
 	TunnelMetrics string
 	Drain         time.Duration
 	TokenRetry    time.Duration
-	// Token returns the tunnel token.
+	// Token returns the tunnel token. Without one, the edge runs no tunnel: Envoy alone.
 	Token  func(ctx context.Context) (string, error)
 	Logger *slog.Logger
 }
@@ -123,7 +127,8 @@ func TokenFrom(get func(ctx context.Context) (string, error), prefix string) fun
 type status struct {
 	// envoyAdmin is Envoy's admin URL, such as http://127.0.0.1:9901.
 	envoyAdmin string
-	// tunnelMetrics is cloudflared's metrics URL, such as http://127.0.0.1:2000.
+	// tunnelMetrics is cloudflared's metrics URL, such as http://127.0.0.1:2000, or empty
+	// without a tunnel.
 	tunnelMetrics string
 	client        *http.Client
 	draining      atomic.Bool
@@ -143,7 +148,7 @@ func (s *status) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "draining", http.StatusServiceUnavailable)
 		case !s.ok(r.Context(), s.envoyAdmin+"/ready"):
 			http.Error(w, "envoy isn't ready", http.StatusServiceUnavailable)
-		case !s.ok(r.Context(), s.tunnelMetrics+"/ready"):
+		case s.tunnelMetrics != "" && !s.ok(r.Context(), s.tunnelMetrics+"/ready"):
 			http.Error(w, "the tunnel has no connection", http.StatusServiceUnavailable)
 		default:
 			w.Write([]byte("ready\n"))
@@ -180,13 +185,14 @@ func (s *status) ok(ctx context.Context, url string) bool {
 // bootstrap, starts Envoy and cloudflared, and serves its status. When ctx is done, it fails
 // its readiness check, stops cloudflared so that Cloudflare sends requests to another
 // connector, gives Envoy time to finish what it has, and then stops Envoy. If either
-// program exits on its own, Run returns an error, and Docker restarts the container.
+// program exits on its own, Run returns an error, and Docker restarts the container. Without
+// a Token it runs Envoy alone.
 func Run(ctx context.Context, cfg Config) error {
 	cfg.defaults()
 	log := cfg.Logger
 
 	var token string
-	for {
+	for cfg.Token != nil {
 		var err error
 		if token, err = cfg.Token(ctx); err == nil {
 			break
@@ -202,8 +208,10 @@ func Run(ctx context.Context, cfg Config) error {
 	if err := os.WriteFile(cfg.BootstrapPath, []byte(Bootstrap(cfg.FilesDir, cfg.AdminPort)), 0o644); err != nil {
 		return err
 	}
-	st := &status{envoyAdmin: fmt.Sprintf("http://127.0.0.1:%d", cfg.AdminPort), tunnelMetrics: "http://" + cfg.TunnelMetrics,
-		client: &http.Client{Transport: &http.Transport{Proxy: nil}}}
+	st := &status{envoyAdmin: fmt.Sprintf("http://127.0.0.1:%d", cfg.AdminPort), client: &http.Client{Transport: &http.Transport{Proxy: nil}}}
+	if cfg.Token != nil {
+		st.tunnelMetrics = "http://" + cfg.TunnelMetrics
+	}
 	ln, err := net.Listen("tcp", cfg.StatusAddr)
 	if err != nil {
 		return err
@@ -214,29 +222,39 @@ func Run(ctx context.Context, cfg Config) error {
 
 	envoy := &program{name: "envoy", cmd: exec.Command(cfg.Envoy, "-c", cfg.BootstrapPath, "--log-level", "warn",
 		"--drain-time-s", fmt.Sprint(int(cfg.Drain.Seconds())))}
-	// The token goes in the environment, not the command line, where ps would show it.
-	tunnel := &program{name: "cloudflared", cmd: exec.Command(cfg.Cloudflared, "tunnel", "--no-autoupdate", "--metrics", cfg.TunnelMetrics, "run")}
-	tunnel.cmd.Env = append(os.Environ(), "TUNNEL_TOKEN="+token)
+	programs := []*program{envoy}
+	var tunnel *program
+	if cfg.Token != nil {
+		// The token goes in the environment, not the command line, where ps would show it.
+		tunnel = &program{name: "cloudflared", cmd: exec.Command(cfg.Cloudflared, "tunnel", "--no-autoupdate", "--metrics", cfg.TunnelMetrics, "run")}
+		tunnel.cmd.Env = append(os.Environ(), "TUNNEL_TOKEN="+token)
+		programs = append(programs, tunnel)
+	}
+	stopAll := func(d time.Duration) {
+		for _, p := range programs {
+			p.stop(d)
+		}
+	}
 	exited := make(chan string, 2)
-	for _, p := range []*program{envoy, tunnel} {
+	for _, p := range programs {
 		if err := p.start(exited); err != nil {
-			envoy.stop(time.Second)
-			tunnel.stop(time.Second)
+			stopAll(time.Second)
 			return err
 		}
 	}
-	log.Info("edge running")
+	log.Info("edge running", "tunnel", tunnel != nil)
 
 	select {
 	case <-ctx.Done():
 	case name := <-exited:
-		envoy.stop(cfg.Drain)
-		tunnel.stop(cfg.Drain)
+		stopAll(cfg.Drain)
 		return fmt.Errorf("%s exited", name)
 	}
 	log.Info("edge stopping: failing readiness, then the tunnel, then Envoy")
 	st.draining.Store(true)
-	tunnel.stop(30 * time.Second)
+	if tunnel != nil {
+		tunnel.stop(30 * time.Second)
+	}
 	time.Sleep(cfg.Drain)
 	envoy.stop(5 * time.Second)
 	return nil

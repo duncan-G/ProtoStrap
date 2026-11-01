@@ -251,7 +251,7 @@ run "volume_lists_on_two_data_vms" {
     values = { id = "vol-0c" }
   }
   override_resource {
-    target = aws_ebs_volume.telemetry
+    target = aws_ebs_volume.telemetry[0]
     values = { id = "vol-0t" }
   }
   override_resource {
@@ -346,12 +346,16 @@ run "no_compute_pool" {
     spec  = <<-EOT
       app: tiny
       protostrap: 0.1.0
-      hosts:
-        tiny: tiny.example.com
       pools:
         ingress: { vm: c8g.medium }
         general: { vm: [m7g.large], max: 2 }
         data: { vm: m7g.large }
+      gateway:
+        hosts:
+          tiny: tiny.example.com
+        upstreams:
+          web:
+            routes: [/]
       components:
         web:
           kind: service
@@ -360,7 +364,6 @@ run "no_compute_pool" {
           request: { cpu: 100m, memory: 128Mi }
           port: 80
           ready: /healthz
-          routes: [/]
     EOT
     hosts = null
   }
@@ -391,12 +394,16 @@ run "buckets" {
     spec         = <<-EOT
       app: tiny
       protostrap: 0.1.0
-      hosts:
-        tiny: tiny.example.com
       pools:
         ingress: { vm: c8g.medium }
         general: { vm: [m7g.large], max: 2 }
         data: { vm: m7g.large }
+      gateway:
+        hosts:
+          tiny: tiny.example.com
+        upstreams:
+          web:
+            routes: [/]
       queues:
         jobs: {}
       buckets:
@@ -411,7 +418,6 @@ run "buckets" {
           request: { cpu: 100m, memory: 128Mi }
           port: 80
           ready: /healthz
-          routes: [/]
           uses: [documents, files, jobs]
         worker:
           kind: worker
@@ -565,19 +571,19 @@ run "telemetry" {
   command = apply
 
   variables {
-    spec = replace(file("../../sample/protostrap.yaml"), "edge:\n", "telemetry:\n  volume: 30Gi\n  retention: { logs: 14d, traces: 3d }\n\nedge:\n")
+    spec = replace(file("../../sample/protostrap.yaml"), "telemetry: {}\n", "telemetry:\n  volume: 30Gi\n  retention: { logs: 14d, traces: 3d }\n")
   }
 
   assert {
-    condition = (aws_ebs_volume.telemetry.size == 30 &&
-      aws_ebs_volume.telemetry.tags["protostrap:mount"] == "/data/telemetry" &&
-      aws_ebs_volume.telemetry.tags["protostrap:snapshot"] == "daily" &&
-    aws_volume_attachment.telemetry.instance_id == aws_instance.data["data-1"].id)
+    condition = (aws_ebs_volume.telemetry[0].size == 30 &&
+      aws_ebs_volume.telemetry[0].tags["protostrap:mount"] == "/data/telemetry" &&
+      aws_ebs_volume.telemetry[0].tags["protostrap:snapshot"] == "daily" &&
+    aws_volume_attachment.telemetry[0].instance_id == aws_instance.data["data-1"].id)
     error_message = "Telemetry's volume is on data-1, sized from the spec, mounted at /data/telemetry and snapshotted like the others."
   }
 
   assert {
-    condition     = !contains(values(aws_volume_attachment.stateful)[*].device_name, aws_volume_attachment.telemetry.device_name) && aws_volume_attachment.telemetry.device_name != aws_volume_attachment.control.device_name
+    condition     = !contains(values(aws_volume_attachment.stateful)[*].device_name, aws_volume_attachment.telemetry[0].device_name) && aws_volume_attachment.telemetry[0].device_name != aws_volume_attachment.control.device_name
     error_message = "Telemetry's volume has a device of its own on data-1."
   }
 
@@ -600,10 +606,10 @@ run "telemetry" {
   }
 
   assert {
-    condition = (aws_ssm_document.telemetry.name == "protostrap-telemetry" &&
-      jsondecode(aws_ssm_document.telemetry.content).properties.portNumber == "7482" &&
-      jsondecode(aws_ssm_document.telemetry.content).properties.type == "LocalPortForwarding" &&
-    keys(jsondecode(aws_ssm_document.telemetry.content).parameters) == ["localPortNumber"])
+    condition = (aws_ssm_document.telemetry[0].name == "protostrap-telemetry" &&
+      jsondecode(aws_ssm_document.telemetry[0].content).properties.portNumber == "7482" &&
+      jsondecode(aws_ssm_document.telemetry[0].content).properties.type == "LocalPortForwarding" &&
+    keys(jsondecode(aws_ssm_document.telemetry[0].content).parameters) == ["localPortNumber"])
     error_message = "Grafana's session document forwards port 7482 and nothing else, apart from the operator UI's."
   }
 
@@ -624,8 +630,180 @@ run "telemetry_defaults" {
   command = apply
 
   assert {
-    condition = (aws_ebs_volume.telemetry.size == 20 &&
+    condition = (aws_ebs_volume.telemetry[0].size == 20 &&
     [for r in aws_s3_bucket_lifecycle_configuration.telemetry.rule : r.expiration[0].days if r.id == "expire"] == [37])
-    error_message = "Without a telemetry section: a 20Gi volume, and 30 days of logs and traces, plus a week."
+    error_message = "With telemetry: {}: a 20Gi volume, and 30 days of logs and traces, plus a week."
+  }
+}
+
+# Without telemetry, the volume, its port and Grafana's session document go: replicas' output
+# goes to their log groups. The bucket stays, and its lifecycle rule expires what is in it.
+run "no_telemetry" {
+  command = apply
+
+  variables {
+    spec = replace(file("../../sample/protostrap.yaml"), "telemetry: {}\n", "")
+  }
+
+  assert {
+    condition     = length(aws_ebs_volume.telemetry) == 0 && length(aws_volume_attachment.telemetry) == 0 && length(aws_ssm_document.telemetry) == 0
+    error_message = "No telemetry volume or session document without telemetry."
+  }
+
+  assert {
+    condition     = !contains(keys(aws_vpc_security_group_ingress_rule.node), "telemetry")
+    error_message = "No VM sends to port 24224 without telemetry."
+  }
+
+  assert {
+    condition     = !strcontains(aws_s3_object.volumes["data-1"].content, "/data/telemetry")
+    error_message = "data-1 mounts no telemetry volume: ${aws_s3_object.volumes["data-1"].content}"
+  }
+
+  assert {
+    condition     = aws_s3_bucket.telemetry.bucket == "protostrap-123456789012-us-east-1-telemetry" && contains(keys(aws_cloudwatch_log_group.component), "api")
+    error_message = "The telemetry bucket stays, and every component keeps its log group, where its output goes."
+  }
+}
+
+# Without a tunnel, Cloudflare has no tunnel, hostnames or rate limit, and the ingress VMs
+# reach no tunnel port. The gateway's hosts still give replicas their HOST_ variables.
+run "no_tunnel" {
+  command = apply
+
+  variables {
+    spec = replace(file("../../sample/protostrap.yaml"), "tunnel: {}\n", "")
+  }
+
+  assert {
+    condition = (length(cloudflare_zero_trust_tunnel_cloudflared.edge) == 0 && length(cloudflare_zero_trust_tunnel_cloudflared_config.edge) == 0 &&
+    length(cloudflare_dns_record.host) == 0 && length(cloudflare_ruleset.rate_limit) == 0 && length(aws_vpc_security_group_egress_rule.ingress_tunnel) == 0)
+    error_message = "No tunnel, hostnames, rate limit or tunnel port without a tunnel."
+  }
+
+  assert {
+    condition     = jsondecode(aws_s3_object.hosts.content) == { sample = "sample.example.com" } && output.tunnel_id == null
+    error_message = "hosts.json still names the gateway's hosts; there's no tunnel to name."
+  }
+}
+
+# Operator UIs reach their apps through the tunnel, so they need one.
+run "operator_hosts_need_the_tunnel" {
+  command = plan
+
+  variables {
+    spec           = replace(file("../../sample/protostrap.yaml"), "tunnel: {}\n", "")
+    operator_hosts = { "ops.example.com" = ["ops@example.com"] }
+  }
+
+  expect_failures = [aws_s3_object.hosts]
+}
+
+# Without a gateway, there are no hosts: hosts.json is empty, and the account's config gives
+# none.
+run "no_gateway" {
+  command = apply
+
+  variables {
+    spec  = replace(replace(replace(file("../../sample/protostrap.yaml"), "tunnel: {}\n", ""), "/(?s)gateway:\\n.*?\\n\\n/", ""), "{ requests: 20/s }, ", "")
+    hosts = null
+  }
+
+  assert {
+    condition     = jsondecode(aws_s3_object.hosts.content) == {} && length(cloudflare_dns_record.host) == 0 && length(local.hosts) == 0
+    error_message = "No hosts without a gateway."
+  }
+}
+
+# The CDN's own rules (docs/protostrap.md#cdn): each WAF and cache rule becomes a rule of its
+# phase's ruleset, its fields an expression scoped to the hosts it names, or else every host
+# the tunnel serves.
+run "cdn" {
+  command = apply
+
+  variables {
+    spec = replace(file("../../sample/protostrap.yaml"), "tunnel: {}\n", <<-EOT
+      cdn:
+        rate_limit: { requests: 300, period: 1m }
+        waf:
+          - { name: block-wp, paths: [/wp-admin/, /wp-login.php], action: block }
+          - { name: geo, hosts: [sample], methods: [POST, PUT], not_countries: [US, CA], action: managed_challenge }
+          - { name: office, ips: [203.0.113.0/24, "2001:db8::/32"], action: skip }
+          - { name: bots, not_ips: [198.51.100.7], expression: 'http.user_agent contains "sqlmap"', action: js_challenge }
+        cache:
+          - { name: assets, hosts: [sample], paths: [/assets/], extensions: [js, css], edge_ttl: 30d, browser_ttl: 1d }
+          - { name: api, paths: [/api/], cache: false }
+          - { name: pages, countries: [GB] }
+
+      tunnel: {}
+      EOT
+    )
+  }
+
+  assert {
+    condition = (cloudflare_ruleset.waf[0].phase == "http_request_firewall_custom" && cloudflare_ruleset.waf[0].kind == "zone" &&
+    [for r in cloudflare_ruleset.waf[0].rules : r.ref] == ["block-wp", "geo", "office", "bots"])
+    error_message = "The WAF rules are the zone's custom rules, in the spec's order."
+  }
+
+  assert {
+    condition = (cloudflare_ruleset.waf[0].rules[0].expression == "(http.host in {\"sample.example.com\"}) and (starts_with(http.request.uri.path, \"/wp-admin/\") or starts_with(http.request.uri.path, \"/wp-login.php\"))" &&
+    cloudflare_ruleset.waf[0].rules[0].action == "block")
+    error_message = "A rule matches its paths as prefixes, on the hosts the tunnel serves: ${cloudflare_ruleset.waf[0].rules[0].expression}"
+  }
+
+  assert {
+    condition     = cloudflare_ruleset.waf[0].rules[1].expression == "(http.host in {\"sample.example.com\"}) and (http.request.method in {\"POST\" \"PUT\"}) and (not ip.src.country in {\"US\" \"CA\"})"
+    error_message = "A rule's hosts are the account's hostnames for the names, and every field must match: ${cloudflare_ruleset.waf[0].rules[1].expression}"
+  }
+
+  assert {
+    condition = (cloudflare_ruleset.waf[0].rules[2].expression == "(http.host in {\"sample.example.com\"}) and (ip.src in {203.0.113.0/24 2001:db8::/32})" &&
+      cloudflare_ruleset.waf[0].rules[2].action == "skip" &&
+      cloudflare_ruleset.waf[0].rules[2].action_parameters.ruleset == "current" &&
+    cloudflare_ruleset.waf[0].rules[2].action_parameters.phases == tolist(["http_ratelimit"]))
+    error_message = "A skip rule skips the remaining WAF rules and the rate limit."
+  }
+
+  assert {
+    condition     = cloudflare_ruleset.waf[0].rules[3].expression == "(http.host in {\"sample.example.com\"}) and (not ip.src in {198.51.100.7}) and (http.user_agent contains \"sqlmap\")"
+    error_message = "A raw expression must match as well as the fields: ${cloudflare_ruleset.waf[0].rules[3].expression}"
+  }
+
+  assert {
+    condition = (cloudflare_ruleset.cache[0].phase == "http_request_cache_settings" &&
+      [for r in cloudflare_ruleset.cache[0].rules : r.ref] == ["assets", "api", "pages"] &&
+      alltrue([for r in cloudflare_ruleset.cache[0].rules : r.action == "set_cache_settings"]) &&
+    cloudflare_ruleset.cache[0].rules[0].expression == "(http.host in {\"sample.example.com\"}) and (starts_with(http.request.uri.path, \"/assets/\")) and (http.request.uri.path.extension in {\"js\" \"css\"})")
+    error_message = "The cache rules are the zone's cache settings, in the spec's order."
+  }
+
+  assert {
+    condition = (cloudflare_ruleset.cache[0].rules[0].action_parameters.cache == true &&
+      cloudflare_ruleset.cache[0].rules[0].action_parameters.edge_ttl.mode == "override_origin" &&
+      cloudflare_ruleset.cache[0].rules[0].action_parameters.edge_ttl.default == 2592000 &&
+      cloudflare_ruleset.cache[0].rules[0].action_parameters.browser_ttl.default == 86400 &&
+      cloudflare_ruleset.cache[0].rules[1].action_parameters.cache == false &&
+      cloudflare_ruleset.cache[0].rules[2].action_parameters.cache == true &&
+      cloudflare_ruleset.cache[0].rules[2].action_parameters.edge_ttl == null &&
+    cloudflare_ruleset.cache[0].rules[2].expression == "(http.host in {\"sample.example.com\"}) and (ip.src.country in {\"GB\"})")
+    error_message = "A cache rule caches, for its TTLs over the origin's when it has them, or bypasses the cache."
+  }
+
+  assert {
+    condition = (cloudflare_ruleset.rate_limit[0].rules[0].ratelimit.requests_per_period == 300 &&
+      cloudflare_ruleset.rate_limit[0].rules[0].ratelimit.period == 60 &&
+    cloudflare_ruleset.rate_limit[0].rules[0].ratelimit.mitigation_timeout == 60)
+    error_message = "The spec's rate limit: a client over it is blocked for its period."
+  }
+}
+
+# Without a cdn section, Cloudflare runs with ProtoStrap's zone settings alone.
+run "no_cdn" {
+  command = apply
+
+  assert {
+    condition     = length(cloudflare_ruleset.waf) == 0 && length(cloudflare_ruleset.cache) == 0 && length(cloudflare_ruleset.rate_limit) == 0
+    error_message = "No WAF, cache or rate limit rules without the spec's cdn."
   }
 }

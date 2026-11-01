@@ -22,12 +22,18 @@ add the ProtoStrap environment, and say what kind of component each compute reso
 ```csharp
 var builder = DistributedApplication.CreateBuilder(args);
 
-builder.AddProtoStrapEnvironment("protostrap", app: "shop")
-    .WithHost("shop", "shop.example.com", local: "shop.localhost")
+var protostrap = builder.AddProtoStrapEnvironment("protostrap", app: "shop")
     .WithIngressPool(vm: "c8g.medium")
     .WithGeneralPool(vm: ["m7g.large", "m6g.large"], min: 1, max: 6)
     .WithComputePool(vm: ["c7g.xlarge", "c6g.xlarge"], min: 0, max: 4)
     .WithDataPool(vm: "m7g.xlarge");
+var gateway = protostrap.AddEnvoyGateway("gateway")
+    .WithHost("shop", "shop.example.com", local: "shop.localhost");
+var tunnel = protostrap.AddCloudflareTunnel("tunnel", gateway);
+protostrap.AddCloudflareCdn("cdn", tunnel)
+    .WithRateLimit(requests: 300, period: TimeSpan.FromMinutes(1))
+    .WithCacheRule("assets", r => r.Paths("/assets/").Cache(edge: TimeSpan.FromDays(30)));
+protostrap.AddTelemetry("telemetry");
 
 var postgres = builder.AddPostgres("postgres")
     .PublishAsProtoStrapStateful(s => s.Vm("data-1").Request(cpu: "2000m", memory: "8Gi").Volume(size: "100Gi"));
@@ -41,7 +47,7 @@ var migrations = builder.AddProject<Projects.Shop_Migrations>("shop-migrations")
     .WithReference(shopDb, connectionName: "shop").WaitFor(shopDb)
     .PublishAsProtoStrapTask(t => t.Request(cpu: "250m", memory: "256Mi"));
 
-builder.AddProject<Projects.Shop_Api>("api")
+var api = builder.AddProject<Projects.Shop_Api>("api")
     .WithReference(shopDb, connectionName: "shop").WaitFor(shopDb)
     .WithReference(files)
     .WithReference(receipts)
@@ -49,9 +55,9 @@ builder.AddProject<Projects.Shop_Api>("api")
     .WaitForCompletion(migrations)
     .PublishAsProtoStrapService(s => s
         .Request(cpu: "500m", memory: "512Mi")
-        .Routes("shop/api/")
         .Ready(Readiness.Grpc)
         .Scale(min: 2, max: 10, demand => demand.Cpu(0.70)));
+gateway.WithUpstream(api, u => u.Routes("shop/api/"));
 
 builder.AddProject<Projects.Shop_OrdersWorker>("orders-worker")
     .WithReference(shopDb, connectionName: "shop").WaitFor(shopDb)
@@ -68,9 +74,18 @@ added to the model in run mode, so `aspire run` is unchanged.
 
 | Call                                          | Becomes                                                                 |
 | --------------------------------------------- | ----------------------------------------------------------------------- |
-| `AddProtoStrapEnvironment(name, app)`         | `app`, and with `WithVersion`, `WithHost`, `With*Pool` and `WithEdge`, the rest of the spec's top; under `aspire run`, every component's process gets `SECRET_ID` (`<app>/dev`), `SECRET_PREFIX`, `AWS_REGION` and `AWS_PROFILE`, and reads dev's secret as in an account ([docs/secrets.md](../docs/secrets.md#dev)) |
-| `.WithHost(name, hostname, local)`            | An entry in `hosts`, which routes name as `name/`; under `aspire run`, every resource's `HOST_<NAME>` and `ORIGIN_<NAME>` for the local hostname |
-| `PublishAsProtoStrapService(...)`             | `kind: service`: `Pool`, `Request`, `Routes`/`Route`, `Ready`, `Metrics`, `Stop`, `Scale`, `SecretFiles` |
+| `AddProtoStrapEnvironment(name, app)`         | `app`, and with `WithVersion` and `With*Pool`, `protostrap` and `pools`; under `aspire run`, every component's process gets `SECRET_ID` (`<app>/dev`), `SECRET_PREFIX`, `AWS_REGION` and `AWS_PROFILE`, and reads dev's secret as in an account ([docs/secrets.md](../docs/secrets.md#dev)) |
+| `.AddEnvoyGateway(name)`                      | `gateway`, Envoy on each ingress VM, with its `request` (`WithRequest`, 500m and 256Mi unless set); under `aspire run`, the local gateway, a container of that name ([Run mode](#run-mode)) |
+| `gateway.WithHost(name, hostname, local)`     | An entry in `gateway.hosts`, which routes name as `name/`; under `aspire run`, every resource's `HOST_<NAME>` and `ORIGIN_<NAME>` for the local hostname |
+| `gateway.WithUpstream(service, u => ...)`     | The service's entry in `gateway.upstreams`: `Routes`/`Route`, `Protocol`, and `Authorize` below. Registering it again adds to it |
+| `u.Authorize(auth, path, headers, forward, respond, open, timeout, skip)` | `authorize`: the service the gateway asks about each request to the upstream's routes first; with `open: true` the gateway sends on a request it can't answer for, `timeout` is how long it waits, up to 5 seconds, and `skip`'s prefixes and extensions, such as `/assets/` and `*.js`, aren't asked about ([Authorizing requests](../docs/protostrap.md#authorizing-requests)). The authorizer needn't be an upstream |
+| `.AddCloudflareTunnel(name, gateway)`         | `tunnel: {}`: cloudflared beside the gateway, which brings requests in from Cloudflare. It runs only in an account |
+| `.AddCloudflareCdn(name, tunnel)`             | `cdn`, with what the calls below set, or `{}`: Cloudflare in front of the tunnel, with the application's own rules. It runs only in an account ([CDN](../docs/protostrap.md#cdn)) |
+| `cdn.WithRateLimit(requests, period)`         | `rate_limit: { requests, period }`: Cloudflare blocks a client over it for the period, 10 seconds unless given, or 1, 2, 5 or 10 minutes, or an hour |
+| `cdn.WithWafRule(name, r => ...)`             | An item of `waf`: what it matches, with `Hosts`, `Paths`, `Extensions`, `Methods`, `Countries`, `NotCountries`, `Ips`, `NotIps` and `Expression`, and its action, `Block()`, `ManagedChallenge()`, `JsChallenge()`, `Challenge()` or `Skip()`. The first rule that matches acts |
+| `cdn.WithCacheRule(name, r => ...)`           | An item of `cache`: what it matches, as a WAF rule does, and `Cache(edge:, browser:)` for TTLs over the origin's, or `Bypass()`. Every rule that matches applies |
+| `.AddTelemetry(name)`                         | `telemetry`, with what `WithRequest`, `WithVolume` and `WithRetention` set, or `{}`. It runs only in an account; without it, replicas' output goes to CloudWatch Logs ([Telemetry](../docs/telemetry.md#without-telemetry)) |
+| `PublishAsProtoStrapService(...)`             | `kind: service`: `Pool`, `Request`, `Ready`, `Metrics`, `Stop`, `Scale`, `SecretFiles` |
 | `PublishAsProtoStrapWorker(...)`              | `kind: worker`: `Pool`, `Request`, `Metrics`, `Stop`, `Scale`, `SecretFiles` |
 | `PublishAsProtoStrapStateful(...)`            | `kind: stateful`: `Vm`, `Request`, `Volume`, `Backup`, `Command`, `Metrics`, `Stop`, `SecretFiles` |
 | `PublishAsProtoStrapTask(...)`                | `kind: task`: `Pool`, `Request`, `Stop`, `SecretFiles`                  |
@@ -80,7 +95,6 @@ added to the model in run mode, so `aspire run` is unchanged.
 | `AddProtoStrapFiles(name)`                    | The files bucket                                                        |
 | `AddProtoStrapEmail(name, domains)`           | The `email` section: the domains the application sends mail from with SES ([Email](../docs/email.md)) |
 | `.WithReference(queue)`, `.WithReference(bucket)`, `.WithReference(files)`, `.WithReference(email)` | `uses`, without the queue the component's own `Queue(...)` signal reads |
-| `.Authorize(auth, path, headers, forward, respond, open, timeout, skip)` | `authorize`: the service the edge asks about each request to this one's routes first; with `open: true` the edge sends on a request it can't answer for, `timeout` is how long it waits, up to 5 seconds, and `skip`'s prefixes and extensions, such as `/assets/` and `*.js`, aren't asked about ([Authorizing requests](../docs/protostrap.md#authorizing-requests)) |
 | `.WithProtoStrapSources(pathspecs)`           | More `sources`, for inputs the build can't show, such as generated protobuf code |
 | `.WithProtoStrapConfig(source, target)`       | `config: { from, path }`: a directory of the repository mounted read-only in each replica, and a read-only bind mount of it under `aspire run` ([Config files](../docs/config.md)) |
 | `.OnConfigChange(ConfigChange.Reload)`, `ConfigChange.Run(...)` | `on_config_change`: how a service, worker or stateful component takes new config files |
@@ -158,17 +172,19 @@ picks a .NET SDK.
 
 ## Run mode
 
-With hosts, `aspire run` runs the edge's Envoy as `protostrap-edge`, serving each host's
-local hostname on port 20000 (`WithLocalEdge(port: ...)`), routed and authorized by the same
-`PublishAsProtoStrapService` settings and rendered by `protostrap edge render`. The
-`protostrap-build` resource, under the edge, builds that `protostrap` with Go from this checkout
-as the AppHost starts and whenever the edge starts (a no-op when nothing changed), turns
-`Behind` when the checkout's Go changes after a build, and has a Rebuild command that rebuilds
-and restarts the edge ([The local edge](../docs/protostrap-aspire.md#the-local-edge)). Without
-the checkout or Go, the edge uses `protostrap` on `PATH`, with the same warning when it isn't the
-AppHost's version. On the dashboard the edge
-links each host, references the services it reaches, and logs each request it routes. Every
-resource gets `HOST_<NAME>` and `ORIGIN_<NAME>` for the local hostnames.
+With a gateway, `aspire run` runs its Envoy as a container named as the gateway is, such as
+`gateway`, serving each host's local hostname on port 20000 (the gateway's
+`WithLocalPort(...)`), routed and authorized by the same `WithUpstream` settings and rendered
+by `protostrap edge render`. The `protostrap-build` resource, under the gateway, builds that
+`protostrap` with Go from this checkout as the AppHost starts and whenever the gateway starts
+(a no-op when nothing changed), turns `Behind` when the checkout's Go changes after a build,
+and has a Rebuild command that rebuilds and restarts the gateway
+([The local gateway](../docs/protostrap-aspire.md#the-local-gateway)). Without the checkout or
+Go, the gateway uses `protostrap` on `PATH`, with the same warning when it isn't the
+AppHost's version. On the dashboard the gateway links each host, references the services it
+reaches, and logs each request it routes. Every resource gets `HOST_<NAME>` and
+`ORIGIN_<NAME>` for the local hostnames. The CDN, the tunnel and telemetry don't run
+locally: requests reach the gateway directly, and the dashboard has the services' telemetry.
 
 In run mode, `AddProtoStrapQueue`, `AddProtoStrapBucket` and `AddProtoStrapFiles` add one
 LocalStack container, `protostrap-localstack`, which creates each queue and bucket, as

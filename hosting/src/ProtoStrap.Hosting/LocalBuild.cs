@@ -7,14 +7,14 @@ using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ProtoStrap.Hosting;
 
-/// <summary>ProtoStrapBuildResource is protostrap-build on the dashboard: the protostrap the local edge renders with.</summary>
+/// <summary>ProtoStrapBuildResource is protostrap-build on the dashboard: the protostrap the local gateway renders with.</summary>
 internal sealed class ProtoStrapBuildResource(string name) : Resource(name);
 
 /// <summary>
-/// LocalBuild is the protostrap the local edge renders with under `aspire run`
-/// (docs/protostrap-aspire.md, "The local edge"). With the ProtoStrap checkout ProtoStrap.Hosting
+/// LocalBuild is the protostrap the local gateway renders with under `aspire run`
+/// (docs/protostrap-aspire.md, "The local gateway"). With the ProtoStrap checkout ProtoStrap.Hosting
 /// is built from, and Go, it builds protostrap from the checkout as the AppHost starts, again
-/// whenever the edge starts, and on its Rebuild command, which then restarts the edge. Go's build
+/// whenever the gateway starts, and on its Rebuild command, which then restarts the gateway. Go's build
 /// cache makes a build a no-op when nothing changed. Every few seconds it checks whether a file
 /// that goes into protostrap changed after the last build started, and says it's behind if one did.
 /// </summary>
@@ -31,7 +31,7 @@ internal sealed class LocalBuild
     internal const string Failed = "Build failed";
     internal const string NoGo = "Go not found";
 
-    // Hidden is the state of a build the edge doesn't use, which the dashboard hides.
+    // Hidden is the state of a build the gateway doesn't use, which the dashboard hides.
     internal const string Hidden = "Not used";
 
     // Executable is the file name protostrap is built as.
@@ -62,23 +62,23 @@ internal sealed class LocalBuild
     private ResourceNotificationService? Notifications { get; set; }
 
     /// <summary>
-    /// Add adds the build under the edge, with its Rebuild command. It starts building as the
+    /// Add adds the build under the gateway, with its Rebuild command. It starts building as the
     /// AppHost starts it.
     /// </summary>
-    public static LocalBuild Add(IDistributedApplicationBuilder builder, ProtoStrapEnvironmentResource environment, IResourceBuilder<ContainerResource> edge)
+    public static LocalBuild Add(IDistributedApplicationBuilder builder, ProtoStrapEnvironmentResource environment, IResourceBuilder<ContainerResource> gateway)
     {
         var build = new LocalBuild(environment, Path.Combine(builder.AppHostDirectory, "obj", "protostrap", Executable));
         builder.AddResource(build.Resource)
-            .WithParentRelationship(edge)
+            .WithParentRelationship(gateway)
             .WithInitialState(new CustomResourceSnapshot
             {
                 ResourceType = "Build",
                 State = KnownResourceStates.NotStarted,
                 Properties = [new("protostrap.binary", build._output)],
             })
-            .WithCommand(RebuildCommand, "Rebuild", context => build.ExecuteRebuildAsync(context, edge.Resource), new CommandOptions
+            .WithCommand(RebuildCommand, "Rebuild", context => build.ExecuteRebuildAsync(context, gateway.Resource), new CommandOptions
             {
-                Description = "Builds protostrap from the ProtoStrap checkout, then restarts the edge with it.",
+                Description = "Builds protostrap from the ProtoStrap checkout, then restarts the gateway with it.",
                 IconName = "ArrowSync",
                 IsHighlighted = true,
                 UpdateState = context =>
@@ -97,11 +97,11 @@ internal sealed class LocalBuild
     }
 
     /// <summary>
-    /// EnsureAsync returns the protostrap the edge renders with, built again if the build is its
-    /// own. Without its own build, as for a binary WithCheck names, it is hidden, and the edge's
+    /// EnsureAsync returns the protostrap the gateway renders with, built again if the build is its
+    /// own. Without its own build, as for a binary WithCheck names, it is hidden, and the gateway's
     /// logger hears whether the binary found isn't the AppHost's ProtoStrap.
     /// </summary>
-    public async Task<string> EnsureAsync(ILogger edgeLogger, CancellationToken cancellationToken)
+    public async Task<string> EnsureAsync(ILogger gatewayLogger, CancellationToken cancellationToken)
     {
         var binary = _environment.Binary;
         var command = _environment.CheckCommand ?? ProtoStrapBinary.DefaultCommand;
@@ -109,14 +109,14 @@ internal sealed class LocalBuild
         if (checkout is null)
         {
             await PublishAsync(Hidden, null);
-            return await binary.FindOrBuildAsync(command, _output, edgeLogger, cancellationToken);
+            return await binary.FindOrBuildAsync(command, _output, gatewayLogger, cancellationToken);
         }
         if (binary.FindGo() is null)
         {
             if (State != NoGo && binary.Find(command) is { } found)
-                Logger.LogWarning("Go isn't installed, so protostrap isn't built from {Checkout}: the edge renders with {Binary}.", checkout, found);
+                Logger.LogWarning("Go isn't installed, so protostrap isn't built from {Checkout}: the gateway renders with {Binary}.", checkout, found);
             await PublishAsync(NoGo, KnownResourceStateStyles.Warn);
-            return await binary.FindOrBuildAsync(command, _output, edgeLogger, cancellationToken);
+            return await binary.FindOrBuildAsync(command, _output, gatewayLogger, cancellationToken);
         }
 
         await _building.WaitAsync(cancellationToken);
@@ -148,7 +148,7 @@ internal sealed class LocalBuild
 
     /// <summary>
     /// CheckAsync says the build is behind once a file that goes into protostrap changed after the
-    /// last build started: the edge still renders with the protostrap built before it.
+    /// last build started: the gateway still renders with the protostrap built before it.
     /// </summary>
     internal async Task CheckAsync()
     {
@@ -157,14 +157,14 @@ internal sealed class LocalBuild
         if (ProtoStrapBinary.NewestSource(checkout) is not { } newest || newest.Changed <= built)
             return;
         Logger.LogWarning(
-            "{File} changed in {Checkout} at {Changed}, after protostrap was built: the edge still renders with the ProtoStrap from before. Rebuild it with protostrap-build's Rebuild, or by restarting the edge.",
+            "{File} changed in {Checkout} at {Changed}, after protostrap was built: the gateway still renders with the ProtoStrap from before. Rebuild it with protostrap-build's Rebuild, or by restarting the gateway.",
             newest.Path, checkout, newest.Changed.ToLocalTime().ToString("HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture));
         await PublishAsync(Behind, KnownResourceStateStyles.Warn);
     }
 
     /// <summary>
-    /// RebuildAsync builds protostrap, then restarts the edge, which renders with it, and returns
-    /// why it couldn't, or null. A failed build leaves the edge as it is.
+    /// RebuildAsync builds protostrap, then restarts the gateway, which renders with it, and returns
+    /// why it couldn't, or null. A failed build leaves the gateway as it is.
     /// </summary>
     internal async Task<string?> RebuildAsync(Func<CancellationToken, Task<string?>> restartEdge, CancellationToken cancellationToken)
     {
@@ -181,19 +181,19 @@ internal sealed class LocalBuild
         return await restartEdge(cancellationToken);
     }
 
-    private async Task<ExecuteCommandResult> ExecuteRebuildAsync(ExecuteCommandContext context, IResource edge)
+    private async Task<ExecuteCommandResult> ExecuteRebuildAsync(ExecuteCommandContext context, IResource gateway)
     {
         var commands = context.Services.GetRequiredService<ResourceCommandService>();
         var problem = await RebuildAsync(async cancellationToken =>
         {
-            var restarted = await commands.ExecuteCommandAsync(edge, KnownResourceCommands.RestartCommand, cancellationToken);
-            return restarted.Success ? null : restarted.Message ?? "the edge didn't restart";
+            var restarted = await commands.ExecuteCommandAsync(gateway, KnownResourceCommands.RestartCommand, cancellationToken);
+            return restarted.Success ? null : restarted.Message ?? "the gateway didn't restart";
         }, context.CancellationToken);
         return problem is null ? CommandResults.Success() : CommandResults.Failure(problem);
     }
 
     /// <summary>
-    /// Start builds protostrap as the AppHost starts, before the edge asks for it, then checks
+    /// Start builds protostrap as the AppHost starts, before the gateway asks for it, then checks
     /// every 5 seconds whether the checkout moved on, until the AppHost stops.
     /// </summary>
     private void Start(InitializeResourceEvent e)
@@ -209,7 +209,7 @@ internal sealed class LocalBuild
             }
             catch (InvalidOperationException)
             {
-                // A failed build is in the build's state and console, and the edge says it too.
+                // A failed build is in the build's state and console, and the gateway says it too.
             }
             using var timer = new PeriodicTimer(TimeSpan.FromSeconds(5));
             try

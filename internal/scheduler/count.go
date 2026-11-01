@@ -267,12 +267,11 @@ func (s *Scheduler) limitCap(c *spec.Component, now time.Time) (int, string, []L
 	return limit, reason, limits
 }
 
-// sampleRequests sums each routed component's request count across the edges, for its
-// rate.
+// sampleRequests sums each upstream's request count across the edges, for its rate.
 func (s *Scheduler) sampleRequests(now time.Time) {
 	tgt := s.st.target
 	for _, c := range tgt.spec.Sorted() {
-		if len(c.Routes) == 0 {
+		if tgt.spec.Upstream(c.Name) == nil {
 			continue
 		}
 		name := edge.RequestsMetric(c.Name)

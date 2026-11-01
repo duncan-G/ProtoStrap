@@ -54,8 +54,8 @@ two, so the deploy side is derived instead of restated.
    differs from the running one. Terraform runs only if its part of the spec differs from the
    last apply. No step diffs one commit against the one before it.
 6. **Each field changes only what it must.** A new image or replica setting replaces
-   replicas; a new route reloads the edge; a new scale setting changes a count; a new queue,
-   bucket, pool or permission runs Terraform (see [Change classes](#change-classes)).
+   replicas; a new route reloads the gateway; a new scale setting changes a count; a new queue,
+   bucket, pool, CDN rule or permission runs Terraform (see [Change classes](#change-classes)).
 7. **Run and publish share one graph.** Dev-only resources are excluded from publish.
    ProtoStrap-only settings are annotations that `aspire run` ignores.
 
@@ -112,23 +112,105 @@ nothing.
 ```csharp
 var protostrap = builder.AddProtoStrapEnvironment("protostrap", app: "protofast")
     .WithVersion("1.4.0")
-    .WithHost("app", "protofast.dev", local: "app.dev.localhost")
-    .WithHost("auth", "auth.protofast.dev", local: "auth.dev.localhost")
-    .WithHost("admin", "admin.protofast.dev", local: "admin.dev.localhost")
     .WithIngressPool(vm: "c8g.medium")
     .WithGeneralPool(vm: ["m7g.large", "m6g.large", "m8g.large", "m7gd.large"],
         min: 1, max: 6, spare: 1, target: 0.70)
     .WithComputePool(vm: ["c7g.xlarge", "c6g.xlarge", "c8g.xlarge", "c7gd.xlarge"],
         min: 0, max: 4)
-    .WithDataPool(vm: "m7g.xlarge", count: 1)
-    .WithEdge(cpu: "500m", memory: "256Mi");
+    .WithDataPool(vm: "m7g.xlarge", count: 1);
 ```
 
-Its settings become the spec's top-level keys: `app`, `protostrap`, `hosts`, `pools` and
-`edge`. The pools are the four in [Spec](protostrap.md#spec): a scaling pool lists VM types
-of one shape, and every type is Graviton (arm64), from the burstable t4g up
-([VM types](vms.md#vm-types)). The edge must fit the ingress pool's VM. Hosts,
-routes and sizes on this page are illustrative.
+Its settings become the spec's top-level keys: `app`, `protostrap` and `pools`. The pools
+are the four in [Spec](protostrap.md#spec): a scaling pool lists VM types of one shape, and
+every type is Graviton (arm64), from the burstable t4g up ([VM types](vms.md#vm-types)).
+ProtoStrap's own components are added to it
+([The tunnel, the gateway and telemetry](#the-tunnel-the-gateway-and-telemetry), and
+[The CDN](#the-cdn)). Hosts, routes and sizes on this page are illustrative.
+
+### The tunnel, the gateway and telemetry
+
+ProtoStrap's own components are resources the AppHost adds to the environment. Each becomes
+a section of the spec, and runs only when it is added ([Spec](protostrap.md#spec)):
+
+```csharp
+var gateway = protostrap.AddEnvoyGateway("gateway")
+    .WithHost("app", "protofast.dev", local: "app.dev.localhost")
+    .WithHost("auth", "auth.protofast.dev", local: "auth.dev.localhost");
+protostrap.AddCloudflareTunnel("tunnel", gateway);
+protostrap.AddTelemetry("telemetry");
+
+var auth = builder.AddProject<Projects.Auth>("auth")
+    .PublishAsProtoStrapService(s => s.Request(cpu: "250m", memory: "256Mi"));
+var api = builder.AddProject<Projects.Api>("api")
+    .PublishAsProtoStrapService(s => s.Request(cpu: "500m", memory: "512Mi").Ready(Readiness.Grpc));
+gateway.WithUpstream(auth, u => u.Routes("auth/"))
+    .WithUpstream(api, u => u.Routes("app/api/").Authorize(auth, path: "/auth/check", headers: ["x-user"], forward: ["cookie"]));
+```
+
+| Method                               | Adds                                                              | Settings                                                    |
+| ------------------------------------ | ----------------------------------------------------------------- | ----------------------------------------------------------- |
+| `AddEnvoyGateway(name)`              | The [gateway](protostrap.md#gateway), Envoy on each ingress VM    | `WithHost(name, hostname, local:)`, `WithUpstream(service, ...)`, `WithRequest(cpu, memory)`, `WithLocalPort(port)` |
+| `AddCloudflareTunnel(name, gateway)` | The [tunnel](protostrap.md#tunnel), cloudflared beside the gateway | None. The gateway is the same environment's                |
+| `AddTelemetry(name)`                 | [Telemetry](telemetry.md), on data-1                              | `WithRequest(cpu, memory)`, `WithVolume("30Gi")`, `WithRetention(logs:, traces:, metrics:)` |
+
+- **Each is added once** per environment, and the environment's resource holds it, as
+  `Gateway`, `Tunnel` or `Telemetry`. None is a component of its own: the tunnel's and
+  telemetry's parent is the environment.
+- **An AppHost that adds none runs none:** no edge, no tunnel and no telemetry. Without a
+  gateway, the application has no hosts. Without a tunnel, nothing reaches the gateway from
+  the internet. Without telemetry, replicas' output goes to CloudWatch Logs
+  ([Without telemetry](telemetry.md#without-telemetry)).
+- **`WithHost`** adds a host the routes refer to by its name, with its hostname and its
+  local hostname under `aspire run` ([Hosts](protostrap.md#hosts)).
+- **`WithUpstream`** registers a service, published with `PublishAsProtoStrapService`, that
+  the gateway sends requests to, and says how: `Routes(...)`, or `Route(route, rate)` for a
+  route with a rate, `Protocol(GatewayProtocol.Http2)`, and `Authorize(...)`
+  ([Authorizing requests](protostrap.md#authorizing-requests)). Registering one again
+  configures it further. An authorizer needn't be an upstream: the gateway asks it on its
+  own.
+- **`WithRequest`** on the gateway covers the tunnel's cloudflared too, and must fit the
+  ingress pool's VM: 500m and 256Mi unless set. `WithRetention` takes whole days.
+- **Under `aspire run`,** only the gateway runs, as the local Envoy
+  ([The local gateway](#the-local-gateway)). The tunnel and telemetry run only in an
+  account: Developers read their services' telemetry in Aspire's dashboard.
+
+### The CDN
+
+The CDN is Cloudflare in front of the tunnel, with the application's own WAF rules, cache
+rules and rate limit per client ([CDN](protostrap.md#cdn)). The AppHost adds it to the
+environment, in front of the tunnel it adds:
+
+```csharp
+var tunnel = protostrap.AddCloudflareTunnel("tunnel", gateway);
+protostrap.AddCloudflareCdn("cdn", tunnel)
+    .WithRateLimit(requests: 300, period: TimeSpan.FromMinutes(1))
+    .WithWafRule("block-wp", r => r.Paths("/wp-admin/", "/wp-login.php").Block())
+    .WithWafRule("admin-abroad", r => r.Hosts("admin").NotCountries("US", "CA").ManagedChallenge())
+    .WithWafRule("office", r => r.Ips("203.0.113.0/24").Skip())
+    .WithWafRule("bots", r => r.Expression("http.user_agent contains \"sqlmap\"").JsChallenge())
+    .WithCacheRule("assets", r => r.Hosts("app").Paths("/assets/").Extensions("js", "css")
+        .Cache(edge: TimeSpan.FromDays(30), browser: TimeSpan.FromDays(1)))
+    .WithCacheRule("api", r => r.Paths("/api/").Bypass());
+```
+
+| Method                            | Adds                                                 | Settings                                                    |
+| --------------------------------- | ---------------------------------------------------- | ----------------------------------------------------------- |
+| `AddCloudflareCdn(name, tunnel)`  | The [CDN](protostrap.md#cdn), in front of the tunnel | `WithRateLimit`, `WithWafRule`, `WithCacheRule`. The tunnel is the same environment's |
+| `WithRateLimit(requests, period)` | Cloudflare's rate limit per client                   | `period` is 10 seconds unless given, or 1, 2, 5 or 10 minutes, or an hour |
+| `WithWafRule(name, r => ...)`     | A WAF rule, after those added before                 | What it matches, and one action: `Block()`, `ManagedChallenge()`, `JsChallenge()`, `Challenge()` or `Skip()` |
+| `WithCacheRule(name, r => ...)`   | A cache rule, after those added before               | What it matches, and `Cache(edge:, browser:)` or `Bypass()`. With neither, the responses are eligible for the cache, for the origin's TTLs |
+
+- **It is added once** per environment, and the environment's resource holds it, as `Cdn`.
+  Its parent is the environment, and it is no component of its own.
+- **Both kinds of rule match with** `Hosts`, `Paths`, `Extensions`, `Methods`, `Countries`,
+  `NotCountries`, `Ips`, `NotIps` and `Expression`, each as the spec's field of that name.
+  `Hosts` names hosts as `WithHost` named them, such as `"admin"`, never hostnames.
+- **The generator reports what `protostrap check` would,** naming the rule, such as
+  `cdn: WithWafRule("a"): no host shop: call WithHost("shop", ...) on gateway`, or a WAF rule
+  with no action: `call Block(), ManagedChallenge(), JsChallenge(), Challenge() or Skip()`.
+- **Without it,** Cloudflare runs with ProtoStrap's settings alone.
+- **Under `aspire run`,** it doesn't run, nor does the tunnel: requests reach the local
+  gateway directly.
 
 ### Component kinds
 
@@ -151,10 +233,10 @@ var api = builder.AddProject<Projects.ProtoFast_Api>("api")
     .WaitForCompletion(protofastMigrations)
     .PublishAsProtoStrapService(s => s
         .Request(cpu: "500m", memory: "512Mi")
-        .Routes("app/api/")
         .Ready(Readiness.Grpc)
         .Stop(TimeSpan.FromSeconds(30))
         .Scale(min: 2, max: 10, demand => demand.Cpu(0.70)));
+gateway.WithUpstream(api, u => u.Routes("app/api/"));
 
 builder.AddProject<Projects.ProtoFast_DocumentImport_Worker>("document-import")
     .WithReference(protofastDb, connectionName: "protofast").WaitFor(protofastDb)
@@ -172,13 +254,15 @@ builder.AddProject<Projects.ProtoFast_DocumentImport_Worker>("document-import")
 
 | Method                        | Kind     | Settings                                                            |
 | ----------------------------- | -------- | ------------------------------------------------------------------- |
-| `PublishAsProtoStrapService`  | service  | `pool`, `request`, `routes`, `ready`, `metrics`, `stop`, `scale`, `secret_files` |
+| `PublishAsProtoStrapService`  | service  | `pool`, `request`, `ready`, `metrics`, `stop`, `scale`, `secret_files` |
 | `PublishAsProtoStrapWorker`   | worker   | `pool`, `request`, `metrics`, `stop`, `scale`, `secret_files`       |
 | `PublishAsProtoStrapStateful` | stateful | `vm`, `request`, `volume`, `backup`, `secret_files`                 |
 | `PublishAsProtoStrapTask`     | task     | `pool`, `request`, `secret_files` (see [Migrations as tasks](#migrations-as-tasks)) |
 
 The rest of each component, from its build to its `uses`, `env` and `secrets`, comes from the
-app model (see [Mapping](#mapping)).
+app model (see [Mapping](#mapping)). A service's routes, protocol and authorizer are the
+gateway's, set with `WithUpstream`
+([The tunnel, the gateway and telemetry](#the-tunnel-the-gateway-and-telemetry)).
 
 A compute resource with no `PublishAsProtoStrap*` call fails generation, naming the resource.
 A default would hide a missing request or scale rule until production. On PostgreSQL and
@@ -247,11 +331,11 @@ sees them.
 
 Two kinds of resource are replaced rather than excluded:
 
-- **A gateway.** ProtoStrap's [edge](protostrap.md#edge), cloudflared and Envoy on each
-  zone's ingress VM, is the gateway in an account, and its Envoy is the gateway under
-  `aspire run` too ([The local edge](#the-local-edge)). An application's own Envoy or YARP
-  for local routing is excluded from publish, or dropped: each service's `Routes(...)` and
-  `Authorize(...)` route it in both.
+- **A gateway.** ProtoStrap's [gateway](protostrap.md#gateway), Envoy on each zone's ingress
+  VM, is the gateway in an account, and its Envoy is the gateway under `aspire run` too
+  ([The local gateway](#the-local-gateway)). An application's own Envoy or YARP for local
+  routing is excluded from publish, or dropped: the gateway's `WithUpstream(...)` routes and
+  authorizes each service in both.
 - **Bind mounts.** A replica can't mount the repository. Files the program reads once, such
   as Keycloak's themes and providers, go into the image. Files it reloads become
   [config files](config.md) with `WithProtoStrapConfig`, which is a read-only bind mount
@@ -278,8 +362,12 @@ Generation fails, listing every resource at fault, when:
 - a project has no `global.json` at or above it, inside the spec's directory, that sets
   `sdk.version`, since ProtoStrap never picks a .NET SDK;
 - a variable refers to a resource excluded from publish;
-- a compute resource has no `PublishAsProtoStrap*` call, or its settings are missing or
-  malformed, such as a request that isn't CPU and memory.
+- an upstream isn't a service from `PublishAsProtoStrapService`, is excluded from publish,
+  or has no routes, or a route names a host the gateway doesn't have;
+- a compute resource has no `PublishAsProtoStrap*` call, or its settings, or the gateway's
+  or telemetry's, are missing or malformed, such as a request that isn't CPU and memory;
+- the CDN's rate limit or a rule breaks the rules in [CDN](protostrap.md#cdn), such as a
+  rule naming a host the gateway doesn't have, or a WAF rule with no action.
 
 `protostrap check` then runs its own checks on the result, as before: requests that don't fit
 a VM, stateful components that don't fit their data VM together, overlapping routes, unknown
@@ -312,9 +400,20 @@ on the `PATH`.
 | `WithHttpHealthCheck("/healthz")`             | `ready: /healthz`, or `9000/healthz` on another endpoint's port |
 | `Ready(Readiness.Grpc.On(9001))`              | `ready: grpc:9001`, on a service, worker or stateful component  |
 | `Ready(Readiness.Command("pg_isready"))`      | `ready: [pg_isready]`                                           |
-| `Protocol(GatewayProtocol.Http2)`             | `protocol: http2`                                               |
-| `Authorize(auth, path: "/auth/check", headers: ["x-user"], forward: ["cookie"], respond: ["set-cookie"])` | `authorize: { by: auth, ... }` ([Authorizing requests](protostrap.md#authorizing-requests)) |
-| `Authorize(auth, open: true, timeout: TimeSpan.FromMilliseconds(500), skip: ["/assets/", "*.js"])` | `authorize: { by: auth, open: true, timeout: 500ms, skip: [/assets/, "*.js"] }` |
+| `AddCloudflareCdn("cdn", tunnel)`             | `cdn`, with what its methods set, or `cdn: {}`, before `tunnel` |
+| `.WithRateLimit(requests: 300)` on the CDN    | `rate_limit: { requests: 300, period: 10s }`                    |
+| `.WithWafRule("block-wp", r => r.Paths("/wp-admin/").Block())` | An item of `waf`, one line each: `{ name: block-wp, paths: [/wp-admin/], action: block }` |
+| `.WithCacheRule("api", r => r.Paths("/api/").Bypass())` | An item of `cache`: `{ name: api, paths: [/api/], cache: false }` |
+| `AddCloudflareTunnel("tunnel", gateway)`      | `tunnel: {}`                                                    |
+| `AddEnvoyGateway("gateway")`                  | `gateway`, with its `request`, always written: 500m and 256Mi unless `WithRequest` sets it |
+| `gateway.WithHost("app", "protofast.dev", local: "app.dev.localhost")` | `gateway.hosts: { app: protofast.dev }`, sorted by name |
+| `gateway.WithUpstream(api, u => u.Routes("app/api/"))` | `gateway.upstreams.api.routes: [app/api/]`, the upstreams sorted by name |
+| `u.Route("app/v2/", rate: 50)`                | `routes: [{ route: app/v2/, rate: 50/s }]`                      |
+| `u.Protocol(GatewayProtocol.Http2)`           | `protocol: http2`                                               |
+| `u.Authorize(auth, path: "/auth/check", headers: ["x-user"], forward: ["cookie"], respond: ["set-cookie"])` | `authorize: { by: auth, ... }` ([Authorizing requests](protostrap.md#authorizing-requests)) |
+| `u.Authorize(auth, open: true, timeout: TimeSpan.FromMilliseconds(500), skip: ["/assets/", "*.js"])` | `authorize: { by: auth, open: true, timeout: 500ms, skip: [/assets/, "*.js"] }` |
+| `AddTelemetry("telemetry")`                   | `telemetry: {}`                                                 |
+| `.WithRequest(...)`, `.WithVolume("30Gi")`, `.WithRetention(logs: TimeSpan.FromDays(7))` on telemetry | `telemetry: { request: ..., volume: 30Gi, retention: { logs: 7d } }`, only what is set |
 | `WithDataVolume()`                            | The volume's `path`, stateful only                              |
 | `WithProtoStrapConfig("../config/x", "/etc/x")` | `config: { from: config/x, path: /etc/x }`, and a read-only bind mount under `aspire run` |
 | `OnConfigChange(ConfigChange.Reload)`         | `on_config_change: reload`, or a command with `ConfigChange.Run(...)` |
@@ -394,10 +493,6 @@ service's own image. It runs when that component's image changes.
 # Do not edit: change the AppHost, then run `aspire do protostrap-spec`.
 app: protofast
 protostrap: 1.4.0
-hosts:
-  admin: admin.protofast.dev
-  app: protofast.dev
-  auth: auth.protofast.dev
 
 pools:
   ingress: { vm: c8g.medium }
@@ -417,8 +512,30 @@ pools:
     reserved: { cpu: 400m, memory: 1Gi }
   data: { vm: m7g.xlarge, count: 1 }
 
-edge:
+cdn:
+  rate_limit: { requests: 300, period: 10s }
+  waf:
+    - { name: scanners, paths: [/wp-admin/, /.env], action: block }
+    - { name: admin-abroad, hosts: [admin], not_countries: [US, CA], action: managed_challenge }
+  cache:
+    - { name: assets, hosts: [app], paths: [/assets/], edge_ttl: 30d, browser_ttl: 1d }
+    - { name: api, paths: [/api/], cache: false }
+
+tunnel: {}
+
+gateway:
   request: { cpu: 500m, memory: 256Mi }
+  hosts:
+    admin: admin.protofast.dev
+    app: protofast.dev
+    auth: auth.protofast.dev
+  upstreams:
+    api:
+      routes: [app/api/]
+    payments:
+      routes: [app/payments/]
+
+telemetry: {}
 
 queues:
   protofast-document-upload: {}
@@ -451,7 +568,6 @@ components:
     request: { cpu: 500m, memory: 512Mi }
     port: 8080
     ready: grpc
-    routes: [app/api/]
     depends_on: [postgres, redis]
     uses: [documents, protofast-document-upload]
     migrate: protofast-db-migrations
@@ -503,6 +619,10 @@ Payments now depends on two directories instead of all of `services/shared`.
 The API's `uses` comes from its two `WithReference` calls. A new reference is a one-line diff
 too, and it changes the API's role, so a reviewer sees every new permission.
 
+The CDN, the tunnel, the gateway and telemetry come after the pools, in that order, each
+only if the AppHost added it. The components carry no routes: those are the gateway's, under
+`upstreams`.
+
 ### The generator
 
 The `protostrap-spec` step runs inside the AppHost in publish mode, after Aspire has built the
@@ -534,7 +654,7 @@ public static IResourceBuilder<ProtoStrapEnvironmentResource> AddProtoStrapEnvir
    [Image tags](#image-tags)).
 4. **Write.** Canonical YAML, only if it changed, then `protostrap check` on it, with a
    warning first if that `protostrap` isn't the AppHost's version (see
-   [The local edge](#the-local-edge)).
+   [The local gateway](#the-local-gateway)).
 
 The step doesn't depend on Aspire's `process-parameters` step. It writes parameter names,
 never values, so generating the spec needs no secrets and runs unattended in CI. When it
@@ -638,7 +758,7 @@ should. Changing the conversion service's port changes `conversion` and every co
 | A stateful component's `image`                                  | Copied into ECR              | Its own                                    | —                            | —                                       |
 | `request`, `port`, `ready`, `stop`, `env`, `secrets`, `metrics` | —                            | Its own                                    | —                            | —                                       |
 | A task's sources                                                | The task's image             | None; the task runs once                   | —                            | —                                       |
-| `routes`, or a route's `rate`                                   | —                            | —                                          | Routes file, no restart      | —                                       |
+| An upstream's `routes` or `authorize`, or a route's `rate`      | —                            | —                                          | Routes file, no restart      | —                                       |
 | `scale`, or a pool's `spare`, `target` or `reserved`            | —                            | Counts change on the next cycle            | —                            | —                                       |
 | `uses`, or the queue a `queue` signal reads                     | —                            | —                                          | —                            | The component's role                    |
 | `depends_on`                                                    | —                            | — (order of first starts only)             | —                            | —                                       |
@@ -646,14 +766,20 @@ should. Changing the conversion service's port changes `conversion` and every co
 | A stateful component's volume `size`                            | —                            | —                                          | —                            | Its EBS volume                          |
 | A component added                                               | Its image                    | Started                                    | Its routes                   | ECR repository, secret, log group, role |
 | A component removed                                             | —                            | Stopped                                    | Its routes removed           | Kept until a cleanup                    |
-| `hosts`, `queues`, `buckets`, a pool's VM types, minimum, maximum or count | — | — | — | Terraform |
-| `edge`                                                          | —                            | —                                          | Replaced, beside the old one | —                                       |
-| The `protostrap` version                                        | Binary and edge image copied | The scheduler and agents update themselves | Replaced, beside the old one | —                                       |
+| `gateway.hosts`, `queues`, `buckets`, a pool's VM types, minimum, maximum or count | — | — | — | Terraform |
+| `gateway.request`                                               | —                            | —                                          | Replaced, beside the old one | —                                       |
+| `cdn`, its rate limit or a rule                                 | —                            | —                                          | —                            | The zone's WAF, cache and rate limit rules |
+| `tunnel` added or removed                                       | —                            | —                                          | Replaced, beside the old one | The tunnel and its DNS records          |
+| `gateway` added or removed                                      | The edge image copied, when added | With hosts, every replica, for its `HOST_<NAME>` | Started, or stopped | Terraform                            |
+| `telemetry` added or removed                                    | The telemetry image copied, when added | Every replica, telemetry's included   | Replaced, beside the old one | Telemetry's volume, port and session document |
+| The `protostrap` version                                        | Binary, and the edge and telemetry images, copied | The scheduler and agents update themselves | Replaced, beside the old one | —                  |
 
 Replacing a stateful component stops it before starting the new one, so it is briefly
 unavailable ([Deploy a release](protostrap.md#deploy-a-release)). `protostrap plan` flags
 every stateful replacement. A new edge starts beside the old one on the same ingress VM, so
-requests never pause ([Edge](protostrap.md#edge)). A new `protostrap` version updates the
+requests never pause ([Gateway](protostrap.md#gateway)). Adding or removing telemetry
+replaces every replica so its output goes to the collector or to CloudWatch Logs
+([Without telemetry](telemetry.md#without-telemetry)). A new `protostrap` version updates the
 scheduler first, then the agents on their next sync.
 
 A removed component's ECR repository, secret, role and queues are kept, so a rollback still
@@ -662,10 +788,13 @@ Terraform config.
 
 ### Infrastructure projection
 
-Terraform reads only part of the spec: `hosts`; each pool's VM types, minimum, maximum and
-count; `queues`; `buckets`; and, per component, its name and kind, its `uses` and `queue` signals, and a
-stateful component's `vm` and volume `size`. From these it makes each component's ECR
-repository, secret, log group, [role](identity.md#component-roles) and EBS volume.
+Terraform reads only part of the spec: the whole `cdn`; whether it has the tunnel, the
+gateway and telemetry; the gateway's `hosts`; each pool's VM types, minimum, maximum and
+count; `queues`; `buckets`; per component, its name and kind, its `uses` and `queue`
+signals, and a stateful component's `vm` and volume `size`; and, only when the spec has
+telemetry, its `volume` and how long it keeps logs and traces. From these it makes each
+component's ECR repository, secret, log group, [role](identity.md#component-roles) and EBS
+volume, the tunnel and its DNS records, the CDN's rules, and telemetry's volume.
 `protostrap plan` hashes that part. After a successful apply, the infra workflow writes the
 hash it applied to the deploy bucket, as `infra/<environment>.sha256`.
 
@@ -735,10 +864,11 @@ jobs:
    does today, from the project's directory with the SDK its `global.json` pins. A
    Dockerfile builds with buildx. Each job first runs the test projects whose reference
    closure overlaps the component's sources.
-6. **Release.** Copy the `protostrap` binary, the edge image and the stateful components'
-   upstream images, if they aren't there yet. Write `releases/<commit>.json` with the spec,
-   every component's tag and every fingerprint, then send `protostrap-deploy <commit>`
-   through SSM, as in [Deploy workflow](protostrap.md#deploy-workflow).
+6. **Release.** Copy the `protostrap` binary, the edge and telemetry images the spec runs,
+   and the stateful components' upstream images, if they aren't there yet. Write
+   `releases/<commit>.json` with the spec, every component's tag and every fingerprint,
+   then send `protostrap-deploy <commit>` through SSM, as in
+   [Deploy workflow](protostrap.md#deploy-workflow).
 
 It runs on every push to `main`, in the `prod` GitHub environment after approval, one at a
 time per environment, as in
@@ -756,20 +886,23 @@ can be wired to call `protostrap deploy` for convenience.
 
 ## Local development
 
-### The local edge
+### The local gateway
 
-When the environment has hosts, `aspire run` runs the edge too: a container,
-`protostrap-edge`, of the Envoy an account's edge runs (`envoyproxy/envoy` at the edge's
-version), configured by the same renderer.
+When the environment has a gateway, `aspire run` runs it too: a container named as the
+gateway's resource is, such as `gateway`, of the Envoy an account's edge runs
+(`envoyproxy/envoy` at the edge's version), configured by the same renderer. Only the
+gateway runs locally. The CDN, the tunnel and telemetry run only in an account: requests
+reach the local gateway directly, and the dashboard has the services' telemetry.
 
 - **It serves each host's local hostname** from `WithHost(..., local: "admin.dev.localhost")`
-  on one port, 20000 unless `WithLocalEdge(port: ...)` says otherwise: browsers open
+  on one port, 20000 unless the gateway's `WithLocalPort(...)` says otherwise: browsers open
   `http://admin.dev.localhost:20000`. Every resource gets `HOST_<NAME>` with the local
   hostname and `ORIGIN_<NAME>` with `http://` and that port.
-- **It routes what the spec routes:** each service's routes, protocol, readiness check, rate
-  limits and authorizer, read from the same `PublishAsProtoStrapService` call, so gRPC-Web
-  translation, `authorize` and a check that answers only for its own name behave as they
-  will in an account.
+- **It routes what the spec routes:** each upstream's routes, protocol, rate limits and
+  authorizer, from the same `WithUpstream` call, and each upstream's and authorizer's
+  readiness check, from its `PublishAsProtoStrapService` call, so gRPC-Web translation,
+  `authorize` and a check that answers only for its own name behave as they will in an
+  account.
 - **It reaches services where the AppHost runs them:** a project at
   `host.docker.internal` on its port, a container by its name on Aspire's network. Its
   gRPC checks ask for the server as a whole (service `""`), since no replica has
@@ -782,33 +915,35 @@ version), configured by the same renderer.
   path (without the query, which may hold a sign-in's code), the service it went to, the
   status, and Envoy's response flags, such as `UAEX` for a request the authorizer refused,
   `NR` for one no route matched, or `UH` for one no ready replica could take. An account's
-  edge doesn't log requests. A service's own URL reaches it directly, past the edge's routing
-  and authorization.
+  edge doesn't log requests. A service's own URL reaches it directly, past the gateway's
+  routing and authorization.
 - **It is rendered by `protostrap edge render`,** as the container is created, once every
-  service it reaches has its address on Aspire's container network: the edge depends on each
-  service with routes and each authorizer of one, so Aspire's container tunnel gives each
-  project an address first. The AppHost writes the routing to `obj/protostrap-edge/routing.json`
-  and the renderer writes Envoy's files beside it, which the container mounts.
+  service it reaches has its address on Aspire's container network: the gateway depends on
+  each upstream and each authorizer of one, so Aspire's container tunnel gives each project
+  an address first. The AppHost writes the routing to `obj/<gateway>/routing.json`, such as
+  `obj/gateway/routing.json`, and the renderer writes Envoy's files beside it, which the
+  container mounts.
 - **It renders with the AppHost's own `protostrap`,** which `protostrap-build`, nested under the
-  edge on the dashboard, builds from the ProtoStrap checkout ProtoStrap.Hosting is built from
+  gateway on the dashboard, builds from the ProtoStrap checkout ProtoStrap.Hosting is built from
   into `obj/protostrap/`, so it is the AppHost's version. It builds as the AppHost starts,
-  before the edge needs it, and again each time the edge starts: Go's build cache makes that a
-  no-op, a tenth of a second, when nothing changed, and rebuilds what did. A `protostrap` on
-  `PATH` isn't used, so an old one can't render the edge. The build needs Go (on `PATH`, in
-  `GOROOT`, or where Go's installer puts it) at the version `go.mod` names, and never
-  downloads a toolchain unless `GOTOOLCHAIN` says to. Its state is `Up to date`, or `Build
-  failed` with Go's output in its console, and then the edge doesn't start either.
+  before the gateway needs it, and again each time the gateway starts: Go's build cache makes
+  that a no-op, a tenth of a second, when nothing changed, and rebuilds what did. A
+  `protostrap` on `PATH` isn't used, so an old one can't render the gateway. The build needs
+  Go (on `PATH`, in `GOROOT`, or where Go's installer puts it) at the version `go.mod` names,
+  and never downloads a toolchain unless `GOTOOLCHAIN` says to. Its state is `Up to date`, or
+  `Build failed` with Go's output in its console, and then the gateway doesn't start either.
 - **It says when the checkout moves on.** Every 5 seconds it looks at the checkout's files that
   go into `protostrap`: `go.mod`, and everything under `cmd/` and `internal/` but tests and
   test data, such as the operator UI's embedded files. Once one changed after the last build
-  started, its state is `Behind`, and its console names the file: the edge still renders
-  with the `protostrap` from before. Its **Rebuild** command builds `protostrap`, then restarts
-  the edge with it; a failed build leaves the edge as it is. Restarting the edge rebuilds too.
+  started, its state is `Behind`, and its console names the file: the gateway still renders
+  with the `protostrap` from before. Its **Rebuild** command builds `protostrap`, then
+  restarts the gateway with it; a failed build leaves the gateway as it is. Restarting the
+  gateway rebuilds too.
 - **Otherwise it renders with a `protostrap` the AppHost didn't build**: the one `WithCheck(...)`
   names (`protostrap-build` is hidden then), or, without a checkout (a package) or without Go
-  (`protostrap-build` says `Go not found`), `protostrap` on `PATH`. Without one, the edge
+  (`protostrap-build` says `Go not found`), `protostrap` on `PATH`. Without one, the gateway
   doesn't start, and says what to install. Such a binary may not be the AppHost's version, so
-  the edge's console warns when it can tell, and the edge still renders with it. With a
+  the gateway's console warns when it can tell, and the gateway still renders with it. With a
   checkout, the binary must record the checkout's commit (Go writes it into every binary it
   builds in a git checkout; git says the checkout's), and must be newer than every file of the
   checkout that goes into it, as above; Go touches the binary each time it checks one is up to

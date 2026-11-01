@@ -6,7 +6,8 @@ namespace Aspire.Hosting.ApplicationModel;
 /// <summary>
 /// ProtoStrapEnvironmentResource is the ProtoStrap environment: an Aspire compute environment
 /// whose settings are the top of protostrap.yaml, and whose protostrap-spec pipeline step writes
-/// the spec in publish mode. In run mode it isn't added to the model at all.
+/// the spec in publish mode. In run mode it isn't added to the model at all. ProtoStrap's own
+/// components are added to it: its gateway, tunnel and telemetry, each a section of the spec.
 /// </summary>
 public sealed class ProtoStrapEnvironmentResource : Resource, IComputeEnvironmentResource
 {
@@ -28,24 +29,17 @@ public sealed class ProtoStrapEnvironmentResource : Resource, IComputeEnvironmen
     /// </summary>
     public string? Version { get; internal set; }
 
-    /// <summary>
-    /// Hosts are the application's hosts, by the name the spec's routes refer to them by, with
-    /// their hostnames: the spec's hosts.
-    /// </summary>
-    public IReadOnlyDictionary<string, string> Hosts =>
-        HostSettings.GroupBy(h => h.Name).ToDictionary(g => g.Key, g => g.Last().Hostname, StringComparer.Ordinal);
+    /// <summary>Cdn is the CDN AddCloudflareCdn added, or null: then Cloudflare has ProtoStrap's settings alone.</summary>
+    public ProtoStrapCdnResource? Cdn { get; internal set; }
 
-    /// <summary>HostSettings are the hosts as WithHost was given them, in order.</summary>
-    internal List<HostSettings> HostSettings { get; } = [];
+    /// <summary>Gateway is the gateway AddEnvoyGateway added, or null: then nothing is routed.</summary>
+    public ProtoStrapGatewayResource? Gateway { get; internal set; }
 
-    /// <summary>LocalEdgePort is the port the edge serves the local hostnames on under `aspire run`.</summary>
-    internal int LocalEdgePort { get; set; } = ProtoStrap.Hosting.LocalEdge.DefaultPort;
+    /// <summary>Tunnel is the tunnel AddCloudflareTunnel added, or null: then nothing comes in from the internet.</summary>
+    public ProtoStrapTunnelResource? Tunnel { get; internal set; }
 
-    /// <summary>LocalEdge is the edge's container under `aspire run`, once added.</summary>
-    internal ContainerResource? LocalEdge { get; set; }
-
-    /// <summary>LocalBuild is the protostrap the edge renders with, added with it.</summary>
-    internal LocalBuild? LocalBuild { get; set; }
+    /// <summary>Telemetry is the telemetry AddTelemetry added, or null: then replicas log to CloudWatch.</summary>
+    public ProtoStrapTelemetryResource? Telemetry { get; internal set; }
 
     internal IngressPoolSettings? IngressPool { get; set; }
 
@@ -54,8 +48,6 @@ public sealed class ProtoStrapEnvironmentResource : Resource, IComputeEnvironmen
     internal ScalingPoolSettings? ComputePool { get; set; }
 
     internal DataPoolSettings? DataPool { get; set; }
-
-    internal ResourceSettings? Edge { get; set; }
 
     /// <summary>
     /// SpecPath is where protostrap.yaml goes, as given to WithSpecPath, or null for the
@@ -74,7 +66,7 @@ public sealed class ProtoStrapEnvironmentResource : Resource, IComputeEnvironmen
     /// </summary>
     internal string? CheckCommand { get; set; } = ProtoStrapBinary.DefaultCommand;
 
-    /// <summary>Binary finds the protostrap binary, and builds it for the local edge. Tests replace it.</summary>
+    /// <summary>Binary finds the protostrap binary, and builds it for the local gateway. Tests replace it.</summary>
     internal ProtoStrapBinary Binary { get; set; } = new();
 
     /// <summary>

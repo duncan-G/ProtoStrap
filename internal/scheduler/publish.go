@@ -31,7 +31,7 @@ func (s *Scheduler) assignment(vm *VM) api.Assignment {
 		}
 		a.Replicas = append(a.Replicas, r.Spec)
 	}
-	if vm.Pool == "ingress" && s.st.target != nil {
+	if vm.Pool == "ingress" && hasEdge(s.st.target) {
 		a.Files = edge.Files(edge.Routing{Services: s.edgeServices(s.st.target), Hosts: s.hosts(s.st.target)})
 	}
 	if vm.Pool == "data" && vm.Name == telemetryVM && hasTelemetry(s.st.target) {
@@ -60,25 +60,30 @@ func (s *Scheduler) edgeServices(tgt *target) []edge.Service {
 	return EdgeServices(tgt.spec)
 }
 
-// EdgeServices are a spec's services as the edge sees them: those with routes, and those
-// that authorize their requests.
+// EdgeServices are a spec's services as the edge sees them: the gateway's upstreams, and
+// the services that authorize their requests.
 func EdgeServices(sp *spec.Spec) []edge.Service {
 	authorizers := map[string]bool{}
-	for _, c := range sp.Components {
-		if c.Authorize != nil && len(c.Routes) > 0 {
-			authorizers[c.Authorize.By] = true
+	for _, u := range sp.Upstreams() {
+		if u.Authorize != nil && len(u.Routes) > 0 {
+			authorizers[u.Authorize.By] = true
 		}
 	}
 	var out []edge.Service
 	for _, c := range sp.Sorted() {
-		if c.Kind != api.KindService || (len(c.Routes) == 0 && !authorizers[c.Name]) {
+		u := sp.Upstream(c.Name)
+		if c.Kind != api.KindService || (u == nil && !authorizers[c.Name]) {
 			continue
 		}
-		svc := edge.Service{Name: c.Name, Port: c.Port, Ready: c.Ready, Protocol: c.UpstreamProtocol()}
-		for _, r := range c.Routes {
+		svc := edge.Service{Name: c.Name, Port: c.Port, Ready: c.Ready, Protocol: sp.UpstreamProtocol(c)}
+		if u == nil {
+			out = append(out, svc)
+			continue
+		}
+		for _, r := range u.Routes {
 			svc.Routes = append(svc.Routes, edge.Route{Host: r.Host, Path: r.Path, Rate: float64(r.Rate)})
 		}
-		if a := c.Authorize; a != nil {
+		if a := u.Authorize; a != nil {
 			svc.Authorize = &edge.Authorize{By: a.By, Path: a.CheckPath(), Headers: a.Headers, Forward: a.Forward, Respond: a.Respond,
 				Open: a.Open, Skip: a.Skip}
 			if a.Timeout.Duration > 0 {
@@ -142,9 +147,9 @@ func (s *Scheduler) buildSpec(tgt *target, c *spec.Component, id string) api.Rep
 		ID: id, Component: c.Name, Kind: c.Kind, Release: tgt.rel.Commit,
 		Fingerprint: s.fingerprint(tgt, c.Name), Image: tgt.rel.Components[c.Name].Image,
 		Command: c.Command, Request: c.Request.API(), Port: c.Port, Ready: c.Ready, ReadyCommand: c.ReadyCommand,
-		Stop: int(c.Stop.Seconds()), Env: env, Role: s.roleARN(c.Name),
+		Stop: int(c.Stop.Seconds()), Env: env, Role: s.roleARN(c.Name), LogGroup: s.logGroup(tgt, c.Name),
 	}
-	if c.Kind == api.KindService && c.UpstreamProtocol() != spec.ProtocolHTTP1 {
+	if c.Kind == api.KindService && tgt.spec.UpstreamProtocol(c) != spec.ProtocolHTTP1 {
 		rs.H2C = true
 	}
 	if c.Metrics != "" {
@@ -197,7 +202,13 @@ func (s *Scheduler) metricNames(tgt *target, c *spec.Component) []string {
 	return slices.Sorted(maps.Keys(set))
 }
 
-// edgeSpec is a replica of the edge, the release's ProtoStrap version of it.
+// hasEdge reports whether the target runs the edge: the gateway, and the tunnel with it.
+func hasEdge(tgt *target) bool {
+	return tgt != nil && tgt.spec.Gateway != nil && tgt.rel.Edge.Image != ""
+}
+
+// edgeSpec is a replica of the edge, the release's ProtoStrap version of it. Without the
+// tunnel it runs Envoy alone, and reads no keys.
 func (s *Scheduler) edgeSpec(tgt *target, id string) api.ReplicaSpec {
 	var names []string
 	for _, svc := range s.edgeServices(tgt) {
@@ -205,13 +216,17 @@ func (s *Scheduler) edgeSpec(tgt *target, id string) api.ReplicaSpec {
 	}
 	rs := api.ReplicaSpec{
 		ID: id, Component: "edge", Kind: api.KindEdge, Release: tgt.rel.Commit,
-		Fingerprint: tgt.rel.Edge.Fingerprint, Image: tgt.rel.Edge.Image,
-		Request: tgt.spec.Edge.Request.API(), Port: EdgeStatusPort, Ready: "/ready", Stop: edgeStop,
-		Role: s.roleARN("edge"),
+		Fingerprint: s.edgeFingerprint(tgt), Image: tgt.rel.Edge.Image,
+		Request: tgt.spec.Gateway.Request.API(), Port: EdgeStatusPort, Ready: "/ready", Stop: edgeStop,
+		Role: s.roleARN("edge"), LogGroup: s.logGroup(tgt, "edge"),
 	}
 	if len(names) > 0 {
 		rs.Metrics = &api.MetricsSpec{Endpoint: "9902/metrics", Names: names}
 	}
-	s.secretSpec(&rs, "edge", secret.Edge)
+	if tgt.spec.Tunnel != nil {
+		s.secretSpec(&rs, "edge", secret.Edge)
+	} else {
+		rs.Env = map[string]string{edge.EnvTunnel: "off"}
+	}
 	return rs
 }

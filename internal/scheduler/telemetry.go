@@ -15,8 +15,9 @@ import (
 
 // The telemetry replica (docs/telemetry.md) is ProtoStrap's own, like the edge: one on
 // data-1, with its own volume, so like a stateful component it stops before its
-// replacement starts. A release made before telemetry has no telemetry image, and runs
-// without it.
+// replacement starts. It runs only when the spec has telemetry; a release made before
+// telemetry has no telemetry image, and runs without it too. Without it, Docker sends each
+// replica's output to its component's log group in CloudWatch Logs.
 
 // telemetryStop is how many seconds the telemetry replica gets to stop: Loki and Tempo
 // flush what they hold.
@@ -25,11 +26,22 @@ const telemetryStop = 60
 // telemetryVM is the data VM telemetry runs on, beside the scheduler that serves Grafana.
 const telemetryVM = "data-1"
 
-func hasTelemetry(tgt *target) bool { return tgt != nil && tgt.rel.Telemetry.Image != "" }
+func hasTelemetry(tgt *target) bool {
+	return tgt != nil && tgt.spec.Telemetry != nil && tgt.rel.Telemetry.Image != ""
+}
+
+// logGroup is where a replica's output goes without telemetry: its component's log group,
+// as infra/platform names it. With telemetry it is empty, for the collector.
+func (s *Scheduler) logGroup(tgt *target, component string) string {
+	if hasTelemetry(tgt) {
+		return ""
+	}
+	return "/protostrap/" + s.cfg.App + "/" + component
+}
 
 // telemetrySpec is a replica of telemetry, the release's ProtoStrap version of it.
 func (s *Scheduler) telemetrySpec(tgt *target, id string) api.ReplicaSpec {
-	t := tgt.spec.Telemetry
+	t := *tgt.spec.Telemetry
 	days := func(d spec.Duration) string { return strconv.Itoa(int(d.Hours() / 24)) }
 	return api.ReplicaSpec{
 		ID: id, Component: telemetry.Name, Kind: api.KindTelemetry, Release: tgt.rel.Commit,
@@ -81,7 +93,7 @@ func (s *Scheduler) reconcileTelemetry(tgt *target, now time.Time) {
 }
 
 // scrapeTargets are the metrics endpoints Prometheus scrapes: every component's, and the
-// edge's request counts.
+// edge's request counts when it runs.
 func (s *Scheduler) scrapeTargets(tgt *target) []telemetry.Target {
 	var out []telemetry.Target
 	for _, c := range tgt.spec.Sorted() {
@@ -94,7 +106,10 @@ func (s *Scheduler) scrapeTargets(tgt *target) []telemetry.Target {
 		}
 		out = append(out, telemetry.Target{Component: c.Name, Port: port, Path: path})
 	}
-	return append(out, telemetry.Target{Component: "edge", Port: EdgeStatusPort, Path: "/metrics"})
+	if hasEdge(tgt) {
+		out = append(out, telemetry.Target{Component: "edge", Port: EdgeStatusPort, Path: "/metrics"})
+	}
+	return out
 }
 
 // otelEnv sets the OTEL_ variables a component's replica gets, which OpenTelemetry's SDKs

@@ -127,7 +127,7 @@ func (s *Scheduler) old(r *Replica) bool {
 	case tgt == nil || r.Kind == api.KindTask:
 		return false
 	case r.Kind == api.KindEdge:
-		return r.Fingerprint != tgt.rel.Edge.Fingerprint || !s.keysCurrent(r)
+		return !hasEdge(tgt) || r.Fingerprint != s.edgeFingerprint(tgt) || !s.keysCurrent(r)
 	case r.Kind == api.KindTelemetry:
 		return r.Fingerprint != tgt.rel.Telemetry.Fingerprint
 	}

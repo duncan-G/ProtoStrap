@@ -282,6 +282,9 @@ func (a *Agent) spec(s api.ReplicaSpec, token, cpuset string) container.Spec {
 		StopTimeout: time.Duration(stop) * time.Second, Restart: restart,
 		LogDriver: "fluentd", LogOptions: a.telemetryLogs(),
 	}
+	if s.LogGroup != "" {
+		spec.LogDriver, spec.LogOptions = "awslogs", a.cloudWatchLogs(s.LogGroup)
+	}
 	switch s.Kind {
 	case api.KindStateful:
 		spec.Mounts = []container.Mount{{Source: filepath.Join(a.cfg.DataDir, s.Component), Target: s.Volume}}
@@ -331,6 +334,21 @@ func (a *Agent) telemetryLogs() map[string]string {
 		"labels":                       container.LabelComponent + "," + container.LabelReplica + "," + container.LabelRelease,
 		"mode":                         "non-blocking",
 		"max-buffer-size":              "4m",
+	}
+}
+
+// cloudWatchLogs are the options of Docker's awslogs driver, which sends a replica's output
+// to its component's log group when the application runs no telemetry. Terraform makes the
+// group, and the VM's role may write to it. Docker holds up to 4 MB while CloudWatch can't
+// be reached, and never blocks the replica; each replica writes a stream of its own name.
+func (a *Agent) cloudWatchLogs(group string) map[string]string {
+	return map[string]string{
+		"awslogs-region":       a.cfg.Region,
+		"awslogs-group":        group,
+		"awslogs-create-group": "false",
+		"tag":                  "{{.Name}}",
+		"mode":                 "non-blocking",
+		"max-buffer-size":      "4m",
 	}
 }
 

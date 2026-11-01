@@ -50,8 +50,8 @@ output "egress_ips" {
 }
 
 output "tunnel_id" {
-  description = "The Cloudflare tunnel. scripts/set-edge-token.sh puts its token in the environment's secret."
-  value       = cloudflare_zero_trust_tunnel_cloudflared.edge.id
+  description = "The Cloudflare tunnel, or null without one. scripts/set-edge-token.sh puts its token in the environment's secret."
+  value       = one(cloudflare_zero_trust_tunnel_cloudflared.edge[*].id)
 }
 
 output "hosts" {

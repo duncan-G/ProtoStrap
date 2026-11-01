@@ -9,16 +9,21 @@ was built and run against version 1.12.0 of each.
 ## Aspire ServiceDefaults
 
 The template's `ConfigureOpenTelemetry` sends logs, traces and metrics over OTLP when
-`OTEL_EXPORTER_OTLP_ENDPOINT` is set, which both `aspire run` and ProtoStrap do. Under
-ProtoStrap, turn the console off **before** adding the OpenTelemetry logger, so each line
-leaves once, over OTLP, with its trace ID:
+`OTEL_EXPORTER_OTLP_ENDPOINT` is set, which `aspire run` does, and ProtoStrap when the spec
+has `telemetry`. Under ProtoStrap with the endpoint set, turn the console off **before**
+adding the OpenTelemetry logger, so each line leaves once, over OTLP, with its trace ID.
+Without the endpoint, keep it: stdout is what reaches CloudWatch Logs.
 
 ```csharp
 public static TBuilder ConfigureOpenTelemetry<TBuilder>(this TBuilder builder) where TBuilder : IHostApplicationBuilder
 {
-    // Under ProtoStrap, logs go over OTLP alone: a console logger would send each line
-    // again through stdout. Clear first, so the OpenTelemetry logger added next stays.
-    if (Environment.GetEnvironmentVariable("PROTOSTRAP_REPLICA") is { Length: > 0 })
+    // ProtoStrap with telemetry and `aspire run` set the endpoint; a bare `dotnet run`, and
+    // ProtoStrap without telemetry, don't.
+    var otlp = !string.IsNullOrWhiteSpace(builder.Configuration["OTEL_EXPORTER_OTLP_ENDPOINT"]);
+
+    // Under ProtoStrap with telemetry, logs go over OTLP alone: a console logger would send
+    // each line again through stdout. Clear first, so the OpenTelemetry logger added next stays.
+    if (otlp && Environment.GetEnvironmentVariable("PROTOSTRAP_REPLICA") is { Length: > 0 })
         builder.Logging.ClearProviders();
 
     builder.Logging.AddOpenTelemetry(logging =>
@@ -40,19 +45,19 @@ public static TBuilder ConfigureOpenTelemetry<TBuilder>(this TBuilder builder) w
                 options.Filter = context => !context.Request.Path.StartsWithSegments("/healthz"))
             .AddHttpClientInstrumentation());
 
-    // ProtoStrap and `aspire run` set the endpoint; a bare `dotnet run` doesn't.
-    if (!string.IsNullOrWhiteSpace(builder.Configuration["OTEL_EXPORTER_OTLP_ENDPOINT"]))
+    if (otlp)
         builder.Services.AddOpenTelemetry().UseOtlpExporter();
     return builder;
 }
 ```
 
 - **Remove any `AddJsonConsole` (or other console logger) that `AddServiceDefaults` adds
-  under ProtoStrap.** With the code above, it would send every line a second time.
+  under ProtoStrap with the endpoint set.** With the code above, it would send every line a
+  second time.
 - `UseOtlpExporter()` reads the endpoint and `http/protobuf` from the variables and adds
   each signal's path (`/v1/logs`, `/v1/traces`, `/v1/metrics`) itself. Don't pass options.
-- Run under ProtoStrap, it writes nothing to stdout. A crash's stack trace still reaches
-  stderr, and Loki.
+- Run under ProtoStrap with telemetry, it writes nothing to stdout. A crash's stack trace
+  still reaches stderr, and Loki.
 
 ## Without Aspire
 

@@ -26,7 +26,7 @@ spec, the code or a Terraform root, through a pull request and the deploy workfl
 | What runs where, what each component wants, why    | The operator UI, `/api/status`                                   | Platform Admins, Org Admins |
 | What the scheduler and agents decided and saw      | The infra log, `/api/logs`                                       | Platform Admins, Org Admins |
 | What happened yesterday, what to change            | The daily report, `/api/reports`                                 | Platform Admins, Org Admins |
-| What a component itself printed, its traces and metrics | Grafana: Loki, Tempo and Prometheus                          | Developers, Platform Admins, Org Admins |
+| What a component itself printed, its traces and metrics | Grafana: Loki, Tempo and Prometheus (without the spec's `telemetry`, CloudWatch Logs) | Developers, Platform Admins, Org Admins (CloudWatch: Org Admins) |
 | The scheduler's own view, on the VM                | `sudo protostrap status` on data-1, through an SSM session        | Org Admins       |
 
 Only Platform Admins and Org Admins can open the operator UI. Platform Admins sign in to
@@ -47,7 +47,7 @@ them open; run one yourself only if they ask.
 | ------------------------------- | ------------------------- | ------------------------------------------------ |
 | `scripts/operator-ui.sh`        | `http://localhost:7480`   | The operator UI and its API: Platform Admins and Org Admins |
 | `scripts/operator-ui.sh --admin` | `http://localhost:7481`  | The same, on the port that will hold Org Admins' actions: Org Admins |
-| `scripts/telemetry.sh`          | `http://localhost:7482`   | Grafana: Developers, Platform Admins, Org Admins |
+| `scripts/telemetry.sh`          | `http://localhost:7482`   | Grafana, with the spec's `telemetry`: Developers, Platform Admins, Org Admins |
 
 ```bash
 AWS_PROFILE=<their profile> AWS_REGION=<region> ../ProtoStrap/scripts/operator-ui.sh
@@ -100,9 +100,10 @@ curl -sG http://localhost:7482/api/datasources/proxy/uid/loki/loki/api/v1/query_
 Every line carries its component as `service_name` and its replica as
 `service_instance_id`, so one that failed at startup can be found from the replica id in the
 infra log. The release is `service_version`, a filter after the braces in Loki
-(`{service_name="api"} | service_version="<commit>"`), not a label inside them. Replicas
-started before the environment had telemetry still log to CloudWatch,
-`/protostrap/<app>/<component>`, which only Org Admins can read.
+(`{service_name="api"} | service_version="<commit>"`), not a label inside them. Without the
+spec's `telemetry` there is no Grafana: each replica's output is in CloudWatch Logs,
+`/protostrap/<app>/<component>`, which only Org Admins can read, and the daily report reads
+errors there.
 
 ## Finding out what's wrong
 
@@ -117,12 +118,14 @@ the cause is plain:
    Note each failed replica's id and reason: exit code 137 is out of memory, "not ready
    within" is the readiness check, and an exit soon after start is the program.
 4. **What the replica said:** in Loki, `{service_instance_id="<replica id>"}` around that
-   time, stderr included. A crash's stack trace is there.
+   time, stderr included (without telemetry, its CloudWatch log group). A crash's stack
+   trace is there.
 5. **Where a slow or failing request went:** a trace ID from a log line, or a Tempo search
    on the component, then `/api/traces/<id>`.
 6. **What changed:** `git log` since the last good release; the commit is the release.
 
-A Developer has steps 1, 4, 5 and 6, and asks a Platform Admin for 2 and 3. Say what you
+A Developer has steps 1, 4, 5 and 6, and asks a Platform Admin for 2 and 3. Without
+telemetry there are no traces, and step 4 is an Org Admin's. Say what you
 found with the records that show it, then the fix as a change to the repository.
 
 ## Dead-letter queues
@@ -167,6 +170,10 @@ aws sqs get-queue-attributes --queue-url "$(aws sqs get-queue-url --queue-name p
 | A custom metric or span never shows in Grafana                  | Its `Meter` or `ActivitySource` isn't registered (.NET), or it was only ever sent locally             | Code (protostrap-telemetry)               |
 | A trace stops at a queue                                        | The sender doesn't inject the context into the message, or the worker doesn't ask for its attributes | Code (protostrap-telemetry)               |
 | Jobs piling up in a dead-letter queue                           | The worker fails on them: its errors in Loki say why                                                  | Code, then an Org Admin moves them back (above) |
+| The hosts don't answer from the internet                        | The spec has a gateway but no `tunnel: {}`: nothing reaches the gateway, and Cloudflare has no records | Spec (protostrap-spec)                    |
+| Requests stopped at Cloudflare: a 403, a 429 or a challenge page, never in the gateway's counts | A WAF rule or the rate limit in the spec's `cdn`; Cloudflare's security events name the rule. A load test from one address meets the rate limit | Spec `cdn` (protostrap-spec), applied by the infra workflow |
+| Stale pages or assets after a deploy                            | A `cdn` cache rule's `edge_ttl` or `browser_ttl` keeps the old response                               | The rule's TTLs, or asset names that change with their content |
+| `infra` fails at Cloudflare on a `cdn` rule                     | The token lacks Zone WAF or Cache Rules Edit, the zone's plan can't take the rules or period, or an `expression` is invalid | An Org Admin widens the token; or spec `cdn` |
 
 ## Rolling back
 

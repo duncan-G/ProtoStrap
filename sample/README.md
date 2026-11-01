@@ -42,7 +42,8 @@ with these permissions, scoped to the account and the zone:
 | Zone → DNS → Edit                       | A record per host, pointing at the tunnel           |
 | Zone → Zone Settings → Edit             | Always use HTTPS, and the minimum TLS version       |
 | Zone → Zone → Read                      | Finding the zone                                    |
-| Zone → Zone WAF → Edit                  | Only with `client_rate_limit` set                   |
+| Zone → Zone WAF → Edit                  | Only with the spec's `cdn` WAF rules or rate limit  |
+| Zone → Cache Rules → Edit               | Only with the spec's `cdn` cache rules              |
 | Account → Access: Apps and Policies → Edit | Only with `operator_hosts` set                   |
 
 

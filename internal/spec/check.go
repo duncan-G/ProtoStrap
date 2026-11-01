@@ -2,6 +2,7 @@ package spec
 
 import (
 	"fmt"
+	"net/netip"
 	"path"
 	"regexp"
 	"slices"
@@ -94,6 +95,10 @@ func (s *Spec) Check() []Problem {
 	c := &checker{s: s}
 	c.top()
 	c.pools()
+	c.cdn()
+	c.tunnel()
+	c.gateway()
+	c.telemetry()
 	c.queues()
 	c.buckets()
 	c.email()
@@ -112,20 +117,236 @@ func (c *checker) top() {
 	if !semver.MatchString(s.ProtoStrap) {
 		c.add("protostrap", "%q isn't a ProtoStrap version, like 1.4.0", s.ProtoStrap)
 	}
+	for _, m := range s.moved {
+		c.problems = append(c.problems, Problem{Path: m.Path, Line: m.Line, Msg: m.Msg})
+	}
+}
+
+// present reports whether the spec has a section, and that one written with nothing after it,
+// which YAML reads as null and so leaves off, is a mistake.
+func (c *checker) present(section string) bool {
+	n := c.s.node(section)
+	if n != nil && n.IsNull() {
+		c.add(section, "empty, so it doesn't run: write %s: {} to run it with ProtoStrap's defaults, or leave it out", section)
+	}
+	return n != nil && !n.IsNull()
+}
+
+// These are what a CDN rule may name: Cloudflare's rate limit periods, its WAF rules'
+// actions, and the shapes of a rule's values.
+var (
+	rateLimitPeriods = []time.Duration{10 * time.Second, time.Minute, 2 * time.Minute, 5 * time.Minute, 10 * time.Minute, time.Hour}
+	wafActions       = []string{"block", "managed_challenge", "js_challenge", "challenge", "skip"}
+	httpMethods      = []string{"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"}
+	countryCode      = regexp.MustCompile(`^[A-Z][A-Z0-9]$`)
+	fileExtension    = regexp.MustCompile(`^[a-z0-9]{1,10}$`)
+)
+
+// cdn checks the CDN: its rate limit, and each of its WAF and cache rules.
+func (c *checker) cdn() {
+	if !c.present("cdn") {
+		return
+	}
+	cdn := c.s.CDN
+	if c.s.Tunnel == nil {
+		c.add("cdn", "the CDN is Cloudflare in front of the tunnel: add tunnel: {}")
+	}
+	if r := cdn.RateLimit; r != nil {
+		if r.Requests < 1 {
+			c.add("cdn.rate_limit.requests", "must be at least 1")
+		}
+		if !slices.Contains(rateLimitPeriods, r.Period.Duration) {
+			c.add("cdn.rate_limit.period", "must be 10s, 1m, 2m, 5m, 10m or 1h, Cloudflare's periods")
+		}
+	}
+	for _, list := range []struct {
+		name  string
+		rules []CDNRule
+	}{{"waf", cdn.WAF}, {"cache", cdn.Cache}} {
+		named := map[string]int{}
+		for i, r := range list.rules {
+			at := fmt.Sprintf("cdn.%s[%d]", list.name, i)
+			switch first, ok := named[r.Name]; {
+			case r.Name == "":
+				c.add(at+".name", "required: a name for the rule, such as block-admin")
+			case !dnsLabel.MatchString(r.Name):
+				c.add(at+".name", "%q must be lowercase letters, digits and dashes", r.Name)
+			case ok:
+				c.add(at+".name", "%s is also cdn.%s[%d]", r.Name, list.name, first)
+			default:
+				named[r.Name] = i
+			}
+			c.cdnRule(at, list.name, r)
+		}
+	}
+}
+
+// cdnRule checks what a CDN rule matches, and what it does.
+func (c *checker) cdnRule(at, list string, r CDNRule) {
+	hosts := c.s.Hosts()
+	for i, h := range r.Hosts {
+		ha := fmt.Sprintf("%s.hosts[%d]", at, i)
+		if _, ok := hosts[h]; ok {
+			continue
+		}
+		if strings.Contains(h, ".") {
+			c.add(ha, "a rule names a host by its name in gateway.hosts, such as %s, not its hostname", example(hosts))
+		} else {
+			c.add(ha, "no host %s in gateway.hosts", h)
+		}
+	}
+	for i, p := range r.Paths {
+		if !strings.HasPrefix(p, "/") || strings.ContainsAny(p, "\"\\ \t") {
+			c.add(fmt.Sprintf("%s.paths[%d]", at, i), "%q isn't a path prefix that starts with /, such as /admin/", p)
+		}
+	}
+	for i, e := range r.Extensions {
+		if !fileExtension.MatchString(e) {
+			c.add(fmt.Sprintf("%s.extensions[%d]", at, i), "%q isn't a file extension: up to 10 lower-case letters and digits, such as js", e)
+		}
+	}
+	for i, m := range r.Methods {
+		if !slices.Contains(httpMethods, m) {
+			c.add(fmt.Sprintf("%s.methods[%d]", at, i), "%q isn't an HTTP method in upper case, such as POST", m)
+		}
+	}
+	for field, codes := range map[string][]string{"countries": r.Countries, "not_countries": r.NotCountries} {
+		for i, code := range codes {
+			if !countryCode.MatchString(code) {
+				c.add(fmt.Sprintf("%s.%s[%d]", at, field, i), "%q isn't a two-letter country code, such as US", code)
+			}
+		}
+	}
+	for field, ranges := range map[string][]string{"ips": r.IPs, "not_ips": r.NotIPs} {
+		for i, ip := range ranges {
+			if _, err := netip.ParsePrefix(ip); err == nil {
+				continue
+			}
+			if _, err := netip.ParseAddr(ip); err != nil {
+				c.add(fmt.Sprintf("%s.%s[%d]", at, field, i), "%q isn't an IP address or range, such as 203.0.113.0/24", ip)
+			}
+		}
+	}
+	if c.s.has(at+".expression") && strings.TrimSpace(r.Expression) == "" {
+		c.add(at+".expression", "empty: leave it out, or write Cloudflare's rules language, such as http.user_agent contains \"bot\"")
+	}
+
+	cacheFields := []string{"cache", "edge_ttl", "browser_ttl"}
+	if list == "waf" {
+		switch {
+		case r.Action == "":
+			c.add(at+".action", "required: block, managed_challenge, js_challenge, challenge or skip")
+		case !slices.Contains(wafActions, r.Action):
+			c.add(at+".action", "%q must be block, managed_challenge, js_challenge, challenge or skip", r.Action)
+		}
+		for _, f := range cacheFields {
+			if c.s.has(at + "." + f) {
+				c.add(at+"."+f, "goes in a cache rule, in cdn.cache")
+			}
+		}
+		return
+	}
+	if c.s.has(at + ".action") {
+		c.add(at+".action", "goes in a WAF rule, in cdn.waf")
+	}
+	bypass := r.Cache != nil && !*r.Cache
+	for _, ttl := range []struct {
+		field string
+		d     time.Duration
+	}{{"edge_ttl", r.EdgeTTL.Duration}, {"browser_ttl", r.BrowserTTL.Duration}} {
+		switch {
+		case !c.s.has(at + "." + ttl.field):
+		case bypass:
+			c.add(at+"."+ttl.field, "a rule that bypasses the cache has no TTLs")
+		case ttl.d < time.Second:
+			c.add(at+"."+ttl.field, "must be at least 1s")
+		case ttl.d%time.Second != 0:
+			c.add(at+"."+ttl.field, "must be a whole number of seconds")
+		}
+	}
+}
+
+// tunnel checks the tunnel, which brings requests in for the gateway.
+func (c *checker) tunnel() {
+	if c.present("tunnel") && c.s.Gateway == nil {
+		c.add("tunnel", "the tunnel sends every request to the gateway: add a gateway section")
+	}
+}
+
+// gateway checks the gateway: its request, its hosts and its upstreams.
+func (c *checker) gateway() {
+	if !c.present("gateway") {
+		return
+	}
+	g := c.s.Gateway
+	if r := g.Request; r.CPU <= 0 || r.Memory <= 0 {
+		c.add("gateway.request", "must reserve CPU and memory")
+	} else if ingress, err := LookupVM(c.s.Pools.Ingress.VM); err == nil && !fits(r, room(ingress, c.s.Pools.Ingress.Reserved)) {
+		c.add("gateway.request", "%s and %s doesn't fit the ingress VM, %s, after its reserve", FormatCPU(int64(r.CPU)), FormatMemory(int64(r.Memory)), c.s.Pools.Ingress.VM)
+	}
 	named := map[string]string{} // It maps each hostname to the first host's name it has.
-	for _, name := range s.Hosts.Names() {
-		h, at := s.Hosts[name], "hosts."+name
+	for _, name := range g.Hosts.Names() {
+		h, at := g.Hosts[name], "gateway.hosts."+name
 		if !dnsLabel.MatchString(name) {
 			c.add(at, "%q isn't a host's name: lowercase letters, digits and dashes, which routes refer to as %s/", name, name)
 		}
 		if !hostName.MatchString(h) {
 			c.add(at, "%q isn't a host name", h)
 		} else if other, ok := named[h]; ok {
-			c.add(at, "%s is also hosts.%s: each host has a hostname of its own", h, other)
+			c.add(at, "%s is also gateway.hosts.%s: each host has a hostname of its own", h, other)
 		} else {
 			named[h] = name
 		}
 	}
+	routed := map[string]string{} // It maps each host and path to the upstream routed there.
+	for _, u := range c.s.Upstreams() {
+		c.upstream(u, routed)
+	}
+}
+
+// upstream checks one of the gateway's upstreams: a service, with routes no other has.
+func (c *checker) upstream(u *Upstream, routed map[string]string) {
+	at := "gateway.upstreams." + u.Name
+	switch comp, ok := c.s.Components[u.Name]; {
+	case !ok:
+		c.add(at, "no component %s", u.Name)
+	case comp.Kind != api.KindService:
+		kind := string(comp.Kind)
+		if comp.Kind == api.KindStateful {
+			kind = "stateful component"
+		}
+		c.add(at, "%s is a %s: only services get requests from the gateway", u.Name, kind)
+	}
+	if len(u.Routes) == 0 {
+		c.add(at+".routes", "required: the routes the gateway sends to %s; a service that only authorizes requests needs no upstream", u.Name)
+	}
+	hosts := c.s.Gateway.Hosts
+	for i, route := range u.Routes {
+		ra := fmt.Sprintf("%s.routes[%d]", at, i)
+		_, known := hosts[route.Host]
+		switch {
+		case route.Host == "" || known:
+		case strings.Contains(route.Host, "."):
+			c.add(ra, "a route names its host by its name in gateway.hosts, such as %s%s, not %s", example(hosts), route.Path, route.Host)
+		default:
+			c.add(ra, "no host %s in gateway.hosts", route.Host)
+		}
+		if route.Rate < 0 {
+			c.add(ra, "negative rate")
+		}
+		key := route.Host + route.Path
+		if other, ok := routed[key]; ok {
+			c.add(ra, "%s is also routed to %s", route, other)
+		} else {
+			routed[key] = u.Name
+		}
+	}
+	switch u.Protocol {
+	case "", ProtocolHTTP1, ProtocolHTTP2, ProtocolGRPC:
+	default:
+		c.add(at+".protocol", "%q must be http1, http2 or grpc", u.Protocol)
+	}
+	c.authorize(u)
 }
 
 // vm looks up a pool's VM type, reporting what's wrong with it.
@@ -164,11 +385,6 @@ func (c *checker) pools() {
 	p := c.s.Pools
 	ingress, ok := c.vm("pools.ingress.vm", p.Ingress.VM, false)
 	c.reserve("pools.ingress.reserved", p.Ingress.Reserved, ingress, ok)
-	if r := c.s.Edge.Request; r.CPU <= 0 || r.Memory <= 0 {
-		c.add("edge.request", "must reserve CPU and memory")
-	} else if ok && !fits(r, room(ingress, p.Ingress.Reserved)) {
-		c.add("edge.request", "%s and %s doesn't fit the ingress VM, %s, after its reserve", FormatCPU(int64(r.CPU)), FormatMemory(int64(r.Memory)), p.Ingress.VM)
-	}
 
 	c.scalingPool("general", &p.General, 1)
 	if p.Compute != nil {
@@ -180,12 +396,14 @@ func (c *checker) pools() {
 		c.add("pools.data.count", "must be 1 to 3: data VMs have the fixed addresses 10.20.1.10 to 10.20.1.12")
 	}
 	c.reserve("pools.data.reserved", p.Data.Reserved, data, ok)
-	c.telemetry()
 }
 
 // telemetry checks the telemetry section; whether it fits data-1 is checked with the
 // stateful components there, in components.
 func (c *checker) telemetry() {
+	if !c.present("telemetry") {
+		return
+	}
 	t := c.s.Telemetry
 	switch r := t.Request; {
 	case r.CPU <= 0 || r.Memory <= 0:
@@ -298,6 +516,9 @@ func (c *checker) buckets() {
 		if b.Lock && b.Versions.Duration == 0 {
 			c.add(at+".lock", "needs versions: S3 locks only a versioned bucket")
 		}
+		if b.Browser && len(c.s.Hosts()) == 0 {
+			c.add(at+".browser", "browsers reach the application on the gateway's hosts, and its CORS rule allows their origins: add gateway.hosts")
+		}
 	}
 }
 
@@ -336,19 +557,9 @@ func (c *checker) components() {
 			exportsMetrics = true
 		}
 	}
-	routes := map[string]string{} // It maps each host and path to the component routed there.
 	stateful := map[string][]*Component{}
 	for _, comp := range s.Sorted() {
 		c.component(comp, exportsMetrics)
-		if comp.Kind == api.KindService {
-			for i, r := range comp.Routes {
-				key := r.Host + r.Path
-				if other, ok := routes[key]; ok {
-					c.add(fmt.Sprintf("components.%s.routes[%d]", comp.Name, i), "%s is also routed to %s", r, other)
-				}
-				routes[key] = comp.Name
-			}
-		}
 		if comp.Kind == api.KindStateful && comp.VM != "" {
 			stateful[comp.VM] = append(stateful[comp.VM], comp)
 		}
@@ -373,6 +584,9 @@ func (c *checker) components() {
 					fit = false
 					break
 				}
+			}
+			if s.Telemetry == nil {
+				continue
 			}
 			if t := s.Telemetry.Request; vm == "data-1" && fit && t.CPU > 0 && t.Memory > 0 {
 				total.CPU += t.CPU
@@ -503,23 +717,6 @@ func (c *checker) component(comp *Component, exportsMetrics bool) {
 		c.add(f("port"), "must be 1 to 65535")
 	}
 	c.readiness(comp)
-	if kind != api.KindService && len(comp.Routes) > 0 {
-		c.add(f("routes"), "only services get requests from the gateway")
-	}
-	for i, route := range comp.Routes {
-		ra := fmt.Sprintf("%s.routes[%d]", at, i)
-		_, known := s.Hosts[route.Host]
-		switch {
-		case route.Host == "" || known:
-		case strings.Contains(route.Host, "."):
-			c.add(ra, "a route names its host by its name in hosts, such as %s%s, not %s", example(s.Hosts), route.Path, route.Host)
-		default:
-			c.add(ra, "no host %s in hosts", route.Host)
-		}
-		if route.Rate < 0 {
-			c.add(ra, "negative rate")
-		}
-	}
 	if comp.Metrics != "" {
 		if _, _, err := metrics.ParseEndpoint(comp.Metrics); err != nil {
 			c.add(f("metrics"), "%q must be port/path, such as 9090/metrics", comp.Metrics)
@@ -572,7 +769,6 @@ func (c *checker) component(comp *Component, exportsMetrics bool) {
 	}
 	c.secrets(comp)
 	c.config(comp)
-	c.authorize(comp)
 	if m := comp.Migrate; m != nil {
 		task, ok := s.Components[m.Task]
 		switch {
@@ -705,20 +901,17 @@ const (
 	maxSkipExtensions = 30
 )
 
-// authorize checks the service that authorizes a component's requests at the edge.
-func (c *checker) authorize(comp *Component) {
-	a := comp.Authorize
+// authorize checks the service that authorizes an upstream's requests at the gateway.
+func (c *checker) authorize(u *Upstream) {
+	a := u.Authorize
 	if a == nil {
 		return
 	}
-	f := func(field string) string { return "components." + comp.Name + ".authorize" + field }
-	if comp.Kind != api.KindService || len(comp.Routes) == 0 {
-		c.add(f(""), "only a service with routes takes requests through the edge, so only its requests are authorized there")
-	}
+	f := func(field string) string { return "gateway.upstreams." + u.Name + ".authorize" + field }
 	switch by, ok := c.s.Components[a.By]; {
 	case a.By == "":
 		c.add(f(".by"), "required: the service the edge asks")
-	case a.By == comp.Name:
+	case a.By == u.Name:
 		c.add(f(".by"), "a service can't authorize its own requests: the edge would ask it about every request it asks")
 	case !ok:
 		c.add(f(".by"), "no component %s", a.By)
@@ -769,7 +962,7 @@ func (c *checker) authorize(comp *Component) {
 			c.add(at, "%q isn't a path prefix that starts and ends with /, such as /assets/, or a file extension, such as *.js", skip)
 		case clean != skip:
 			c.add(at, "write it as %s", clean)
-		case len(comp.Routes) > 0 && !slices.ContainsFunc(comp.Routes, func(r Route) bool { return within(skip, r.Path) }):
+		case len(u.Routes) > 0 && !slices.ContainsFunc(u.Routes, func(r Route) bool { return within(skip, r.Path) }):
 			c.add(at, "%s isn't under any of the service's routes", skip)
 		}
 	}
@@ -795,8 +988,8 @@ func (c *checker) readiness(comp *Component) {
 		c.add(f("ready"), "required: grpc, tcp, an HTTP path such as /healthz, or a command")
 	case isCommand && len(comp.ReadyCommand) == 0:
 		c.add(f("ready"), "required: the command to run, as a list")
-	case isCommand && comp.Kind == api.KindService && len(comp.Routes) > 0:
-		c.add(f("ready"), "the edge checks a routed service too, and can't run a command: use grpc, tcp or an HTTP path")
+	case isCommand && comp.Kind == api.KindService && c.s.Upstream(comp.Name) != nil:
+		c.add(f("ready"), "the gateway checks its upstreams too, and can't run a command: use grpc, tcp or an HTTP path")
 	case comp.Ready != "":
 		check, err := probe.ParseCheck(comp.Ready)
 		switch {
@@ -805,17 +998,10 @@ func (c *checker) readiness(comp *Component) {
 		case check.Port == 0 && comp.Port == 0:
 			example := probe.Check{Kind: check.Kind, Port: 8081, Path: check.Path}
 			c.add(f("ready"), "a %s has no port, so its check names a port, such as %s", comp.Kind, example)
-		case comp.Kind == api.KindService && len(comp.Routes) > 0 && check.Kind == probe.CheckGRPC &&
-			comp.UpstreamProtocol() == ProtocolHTTP1:
-			c.add(f("ready"), "the edge checks gRPC over its HTTP/2 connections to the service: set protocol http2 or grpc")
+		case comp.Kind == api.KindService && c.s.Upstream(comp.Name) != nil && check.Kind == probe.CheckGRPC &&
+			c.s.UpstreamProtocol(comp) == ProtocolHTTP1:
+			c.add(f("ready"), "the gateway checks gRPC over its HTTP/2 connections to the service: set gateway.upstreams.%s.protocol to http2 or grpc", comp.Name)
 		}
-	}
-	switch {
-	case comp.Protocol == "":
-	case comp.Kind != api.KindService:
-		c.add(f("protocol"), "only services get requests from the gateway")
-	case comp.Protocol != ProtocolHTTP1 && comp.Protocol != ProtocolHTTP2 && comp.Protocol != ProtocolGRPC:
-		c.add(f("protocol"), "%q must be http1, http2 or grpc", comp.Protocol)
 	}
 }
 
@@ -882,8 +1068,8 @@ func (c *checker) scale(comp *Component, exportsMetrics bool) {
 			if d.Requests <= 0 {
 				c.add(da+".requests", "must be above 0")
 			}
-			if len(comp.Routes) == 0 {
-				c.add(da, "requests are counted by the gateway, so a requests signal needs routes")
+			if c.s.Upstream(comp.Name) == nil {
+				c.add(da, "requests are counted by the gateway, so a requests signal is for one of gateway.upstreams")
 			}
 		case SignalQueue:
 			if _, ok := c.s.Queues[d.Queue]; !ok {
@@ -950,7 +1136,7 @@ func setByProtoStrap(key string) bool {
 
 // hostVariable reports whether key is the HOST_ or ORIGIN_ variable of one of the hosts.
 func (s *Spec) hostVariable(key string) bool {
-	for name := range s.Hosts {
+	for name := range s.Hosts() {
 		if key == HostEnv(name) || key == OriginEnv(name) {
 			return true
 		}

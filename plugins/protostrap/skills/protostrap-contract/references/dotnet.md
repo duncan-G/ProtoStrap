@@ -102,7 +102,7 @@ app.MapGrpcService<HealthServiceImpl>();
 ```
 
 Set `SERVING` for `""` and `PROTOSTRAP_COMPONENT` when started, and `NOT_SERVING` for both in
-`StoppingAsync`, before the drain delay. For gRPC-Web from browsers the edge translates;
+`StoppingAsync`, before the drain delay. For gRPC-Web from browsers the gateway translates;
 nothing changes in the service. Serve metrics on a separate HTTP/1.1 port.
 
 ## A worker
@@ -139,7 +139,8 @@ endpoint, set `Protocol = endpoint.StartsWith("http:") ? Protocol.HTTP : Protoco
 ## Logs
 
 Either one JSON line per entry on stdout, `builder.Logging.AddJsonConsole()` or the sample's
-`JsonLineFormatter`, **or** logs over OTLP with the console off under ProtoStrap. Never both:
-Aspire's ServiceDefaults exports logs over OTLP whenever ProtoStrap's endpoint is set, so a
-JSON console beside it sends every line twice. The code for each is protostrap-telemetry's
+`JsonLineFormatter`, **or** logs over OTLP with the console off under ProtoStrap while it
+sets the endpoint, which it does only with the spec's `telemetry`. Never both: Aspire's
+ServiceDefaults exports logs over OTLP whenever ProtoStrap's endpoint is set, so a JSON
+console beside it sends every line twice. The code for each is protostrap-telemetry's
 `references/dotnet.md`. Raise `Microsoft.AspNetCore` to `Warning` so requests don't each log.

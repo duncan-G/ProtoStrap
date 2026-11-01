@@ -9,7 +9,7 @@ namespace ProtoStrap.Hosting;
 
 /// <summary>
 /// ProtoStrapBinary finds the protostrap binary the AppHost runs: a path, or a name on PATH. For
-/// the local edge, protostrap is built with the machine's Go from the ProtoStrap checkout this
+/// the local gateway, protostrap is built with the machine's Go from the ProtoStrap checkout this
 /// assembly was built from, so it is the AppHost's version. One it finds may not be, which
 /// MismatchAsync tells.
 /// </summary>
@@ -56,7 +56,7 @@ internal sealed class ProtoStrapBinary
     }
 
     /// <summary>
-    /// FindOrBuildAsync finds the protostrap the local edge renders with. protostrap, unless
+    /// FindOrBuildAsync finds the protostrap the local gateway renders with. protostrap, unless
     /// WithCheck names another, is built from the checkout with the machine's Go into output,
     /// every time, so it follows the checkout: Go's build cache makes that a no-op when nothing
     /// changed. Without the checkout or Go, or for a binary WithCheck names, it is found as Find
@@ -78,10 +78,10 @@ internal sealed class ProtoStrapBinary
         }
         if (checkout is null)
             throw new InvalidOperationException(
-                $"The local edge is rendered by `protostrap edge render`, and {command} isn't installed. Build it from the ProtoStrap checkout at the AppHost's version, " +
+                $"The local gateway is rendered by `protostrap edge render`, and {command} isn't installed. Build it from the ProtoStrap checkout at the AppHost's version, " +
                 "`go build -o ~/.local/bin/protostrap ./cmd/protostrap`, and put it on PATH, or name it with WithCheck(...).");
         throw new InvalidOperationException(
-            $"The local edge is rendered by `protostrap edge render`. The AppHost builds protostrap from {checkout}, which needs Go {GoVersion(checkout)} or later, " +
+            $"The local gateway is rendered by `protostrap edge render`. The AppHost builds protostrap from {checkout}, which needs Go {GoVersion(checkout)} or later, " +
             "and protostrap isn't on PATH either: install Go, or put protostrap on PATH.");
     }
 
@@ -134,7 +134,7 @@ internal sealed class ProtoStrapBinary
                 : $"{executable} isn't the AppHost's ProtoStrap: it is ProtoStrap {version}, and ProtoStrap.Hosting is {HostingVersion}. Install protostrap {HostingVersion}.";
         }
 
-        var rebuild = $"Rebuild it from there with `go build -o {executable} ./cmd/protostrap`; without protostrap on PATH, the local edge builds its own.";
+        var rebuild = $"Rebuild it from there with `go build -o {executable} ./cmd/protostrap`; without protostrap on PATH, the local gateway builds its own.";
         var head = OnPath("git") is { } git ? await RunAsync(git, null, ["-C", checkout, "rev-parse", "HEAD"], cancellationToken) : null;
         var at = head is null ? "" : $" at {Short(head)}";
         if (ReadBuild(executable)?.Revision is not { } revision)

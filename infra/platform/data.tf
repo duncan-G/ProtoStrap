@@ -180,10 +180,8 @@ resource "aws_volume_attachment" "control" {
 locals {
   data_volumes = concat(
     [for name, c in local.stateful : { vm = c.vm, id = aws_ebs_volume.stateful[name].id, dir = aws_ebs_volume.stateful[name].tags["protostrap:mount"] }],
-    [
-      { vm = "data-1", id = aws_ebs_volume.control.id, dir = aws_ebs_volume.control.tags["protostrap:mount"] },
-      { vm = "data-1", id = aws_ebs_volume.telemetry.id, dir = aws_ebs_volume.telemetry.tags["protostrap:mount"] },
-    ],
+    [{ vm = "data-1", id = aws_ebs_volume.control.id, dir = aws_ebs_volume.control.tags["protostrap:mount"] }],
+    [for v in aws_ebs_volume.telemetry : { vm = "data-1", id = v.id, dir = v.tags["protostrap:mount"] }],
   )
 }
 

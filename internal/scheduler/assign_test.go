@@ -175,7 +175,7 @@ func TestProtocolAndChecksReachTheEdgeAndReplicas(t *testing.T) {
 	}
 
 	next := strings.Replace(testSpec, "    port: 5432\n", "    port: 5432\n    ready: [pg_isready, -U, postgres]\n", 1)
-	next = strings.Replace(next, "    ready: /healthz\n", "    ready: /healthz\n    protocol: http2\n", 1)
+	next = strings.Replace(next, "    web:\n      routes: [/web/]\n", "    web:\n      protocol: http2\n      routes: [/web/]\n", 1)
 	h.deploy("c2", next, nil)
 	h.until("the second release finishes", 10*time.Minute, func() bool { return h.rollout("c2") == RolloutDone })
 	if s, _ := specOf(h, "postgres"); strings.Join(s.ReadyCommand, " ") != "pg_isready -U postgres" || s.Ready != "" {

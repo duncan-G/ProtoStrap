@@ -1,11 +1,17 @@
 # Telemetry
 
-Every environment keeps its application's logs, traces and metrics, and lets the people who
-build and run it read them. ProtoStrap runs one telemetry replica on data-1. It holds an
-OpenTelemetry collector that takes everything in, Loki for logs, Tempo for traces,
-Prometheus for metrics, and Grafana to read them. Services need no code for ProtoStrap: they
-write to stdout, and those that use OpenTelemetry find the collector in the variables every
-SDK reads.
+An environment whose spec has `telemetry` keeps its application's logs, traces and
+metrics, and lets the people who build and run it read them. ProtoStrap runs one telemetry
+replica on data-1. It holds an OpenTelemetry collector that takes everything in, Loki for
+logs, Tempo for traces, Prometheus for metrics, and Grafana to read them. Services need no
+code for ProtoStrap: they write to stdout, and those that use OpenTelemetry find the
+collector in the variables every SDK reads.
+
+Telemetry is optional. The spec adds it with `telemetry: {}`, or with its
+[settings](#settings), and an AppHost with `AddTelemetry("telemetry")`
+([ProtoStrap with Aspire](protostrap-aspire.md#the-tunnel-the-gateway-and-telemetry)).
+Without it, Docker sends each replica's output to CloudWatch Logs
+([Without telemetry](#without-telemetry)).
 
 | To                                                | See                                                     |
 | ------------------------------------------------- | ------------------------------------------------------- |
@@ -16,6 +22,7 @@ SDK reads.
 | Hand them to an agent, such as Claude             | [For agents](#for-agents)                               |
 | Set retention and size                            | [Settings](#settings)                                   |
 | Know what happens when it is down                 | [When telemetry is down](#when-telemetry-is-down)       |
+| Run an environment without it                     | [Without telemetry](#without-telemetry)                 |
 | Move an environment that logs to CloudWatch       | [Upgrading](#upgrading)                                 |
 
 
@@ -119,7 +126,8 @@ each line twice: once from stdout and once from OTLP. Turn one of them off:
 
 ### Traces and metrics
 
-ProtoStrap sets these variables in every replica, which OpenTelemetry's SDKs read:
+With telemetry, ProtoStrap sets these variables in every replica, which OpenTelemetry's
+SDKs read:
 
 | Variable                      | Value                                                                                       |
 | ----------------------------- | ------------------------------------------------------------------------------------------- |
@@ -163,10 +171,10 @@ scripts/telemetry.sh
 Then open `http://localhost:7482`.
 
 - **Who:** the `protostrap-telemetry` session document forwards port 7482 and nothing else.
-  Developers, Platform Admins and Org Admins may start it in every deployed environment,
-  such as prod, with their sign-in ([People](identity.md#people)). It doesn't let
-  Developers start the operator UI's documents. Locally, Developers read their services'
-  telemetry in Aspire's dashboard ([Local development](#local-development)).
+  Developers, Platform Admins and Org Admins may start it in every deployed environment
+  that has telemetry, such as prod, with their sign-in ([People](identity.md#people)). It
+  doesn't let Developers start the operator UI's documents. Locally, Developers read their
+  services' telemetry in Aspire's dashboard ([Local development](#local-development)).
 - **It has no sign-in of its own.** Everyone who reaches it has the same role, Editor, since
   Grafana lets no Viewer explore. They can explore, query and build dashboards, but can't
   change a data source or add a user. Grafana's own database is in the container, not on the
@@ -210,7 +218,8 @@ curl -sG http://localhost:7482/api/datasources/proxy/uid/loki/loki/api/v1/query_
 
 ## Settings
 
-The spec's `telemetry` section sets the replica's size and how long it keeps things:
+The spec's `telemetry` section runs the replica, and sets its size and how long it keeps
+things. `telemetry: {}` runs it with the defaults below:
 
 ```yaml
 telemetry:
@@ -218,6 +227,10 @@ telemetry:
   volume: 20Gi
   retention: { logs: 30d, traces: 30d, metrics: 15d }
 ```
+
+An AppHost sets the same with `AddTelemetry("telemetry")` and its `WithRequest(cpu,
+memory)`, `WithVolume("20Gi")` and `WithRetention(logs:, traces:, metrics:)`, which write
+only what they set.
 
 | Field               | Default        | Meaning                                                                                  |
 | ------------------- | -------------- | ---------------------------------------------------------------------------------------- |
@@ -237,7 +250,10 @@ telemetry:
   seven days after the longer of `logs` and `traces`, in case Loki or Tempo misses one.
 - **A change replaces the replica.** The old one stops before the new one starts, since only
   one can own the volume, so nothing is taken in for about a minute.
-- **Every environment runs it.** There is no switch to turn it off.
+- **It runs only when the spec has it.** Leaving the section out turns it off
+  ([Without telemetry](#without-telemetry)). A `telemetry:` with nothing after it, which
+  YAML reads as nothing, is a mistake: `protostrap check` says to write `telemetry: {}`, or
+  to leave it out.
 
 ### Where it keeps things
 
@@ -263,6 +279,34 @@ telemetry:
   a new one fails or isn't ready within 5 minutes, the release rolls back.
 
 
+## Without telemetry
+
+A spec without `telemetry` runs none of it: no telemetry replica on data-1, no telemetry
+volume, no `protostrap-telemetry` session document, and no port 24224 between VMs.
+
+- **Replicas' output goes to CloudWatch Logs.** Docker's `awslogs` driver sends each
+  replica's stdout and stderr, the edge's included, to its component's log group,
+  `/protostrap/<app>/<component>`, which Terraform makes for every component, in a stream
+  named after the replica. It never blocks the replica: Docker holds up to 4 MB while
+  CloudWatch can't be reached, then drops lines. The groups keep them for
+  `log_retention_days`.
+- **Replicas get no `OTEL_` variables,** so an SDK that reads them sends nothing, unless the
+  spec's `env` points it at a collector of the application's own.
+- **Nothing keeps metrics or traces.** Agents still scrape each `metrics` endpoint for
+  `metric` signals and limits, as they do with telemetry.
+- **There is no Grafana** to open, and no `scripts/telemetry.sh` session.
+- **The daily report** reads each component's errors from its log group, with a CloudWatch
+  Logs Insights query, instead of from Loki.
+- **Removing it** stops the telemetry replica and replaces every replica, the edge's
+  included, as a release does, so each sends its output to its log group. Terraform
+  deletes the volume, and with it the metrics' history. The telemetry bucket, role and
+  repository stay, as a retired component's do, and the bucket's lifecycle rule expires the
+  logs and traces in it.
+- **Adding it back** replaces every replica again, so each sends its output to the collector
+  and gets the `OTEL_` variables. The log groups keep what they have until it expires.
+- **Cost:** CloudWatch Logs charges for every GB taken in, and for what it stores.
+
+
 ## Security
 
 - **Those who write can't read.** The collector's receivers, and the readiness check, are
@@ -280,10 +324,11 @@ telemetry:
 
 ## Local development
 
-Under `aspire run`, Aspire's dashboard plays this part. Aspire sets the same `OTEL_`
-variables, pointing at its own collector, so a service sends the same telemetry locally as
-in an environment, and nothing in the spec changes. The dashboard keeps everything in
-memory, for one run.
+Under `aspire run`, Aspire's dashboard plays this part, whether or not the AppHost adds
+telemetry: `AddTelemetry` runs only in an account. Aspire sets the same `OTEL_` variables,
+pointing at its own collector, so a service sends the same telemetry locally as in an
+environment, and nothing in the spec changes. The dashboard keeps everything in memory, for
+one run.
 
 
 ## Upgrading
@@ -291,8 +336,8 @@ memory, for one run.
 Before telemetry, each replica's output went to CloudWatch Logs, through Docker's `awslogs`
 driver, to a log group per component.
 
-1. **Make room on data-1.** `protostrap check` fails until the telemetry replica fits beside
-   the stateful components there.
+1. **Add `telemetry` to the spec, and make room on data-1.** `protostrap check` fails until
+   the telemetry replica fits beside the stateful components there.
 2. **Apply the platform.** It creates the telemetry bucket, volume and role, opens port
    24224 between VMs, and adds the `protostrap-telemetry` session document.
 3. **Apply the people root,** so each group may start the new document.

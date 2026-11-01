@@ -68,12 +68,6 @@ variable "operator_hosts" {
   default     = {}
 }
 
-variable "client_rate_limit" {
-  description = "Requests a client may send in 10 seconds before Cloudflare blocks it for 10 seconds. 0: no limit. Envoy applies each route's own rate."
-  type        = number
-  default     = 0
-}
-
 variable "alert_emails" {
   description = "Emails that get operator alerts: AWS Health events, data VM failures, ingress VM replacements."
   type        = list(string)

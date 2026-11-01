@@ -15,6 +15,12 @@ pools:
   ingress: { vm: c8g.medium }
   general: { vm: [m7g.xlarge], max: 4 }
   data: { vm: m7g.xlarge }
+tunnel: {}
+gateway:
+  upstreams:
+    api:
+      routes: [/api/]
+telemetry: {}
 queues:
   orders: {}
 components:
@@ -26,7 +32,6 @@ components:
     request: { cpu: 500m, memory: 512Mi }
     port: 8080
     ready: grpc
-    routes: [/api/]
     uses: [orders]
   worker:
     kind: worker
@@ -55,12 +60,18 @@ components:
 // directory rather than the repository's root.
 func repo(t *testing.T) string {
 	t.Helper()
+	return repoWith(t, testSpec)
+}
+
+// repoWith is a repository whose app/protostrap.yaml is spec.
+func repoWith(t *testing.T, spec string) string {
+	t.Helper()
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git isn't installed")
 	}
 	root := t.TempDir()
 	files := map[string]string{
-		"app/protostrap.yaml":                testSpec,
+		"app/protostrap.yaml":                spec,
 		"app/services/api/Dockerfile":        "FROM scratch\n",
 		"app/services/api/main.go":           "package main\n",
 		"app/services/shared/lib.go":         "package shared\n",
@@ -445,7 +456,8 @@ func TestBuildAndReadARelease(t *testing.T) {
 func TestParseRejectsBrokenReleases(t *testing.T) {
 	for _, bad := range []string{
 		`{}`,
-		`{"commit":"abc1234","app":"shop","protostrap":"1.0.0","spec":"app: shop","components":{}}`,
+		// A spec with a gateway needs the edge's image.
+		`{"commit":"abc1234","app":"shop","protostrap":"1.0.0","spec":"app: shop\ngateway: {}","components":{}}`,
 		`{"commit":"not hex","app":"shop","protostrap":"1.0.0","spec":"x","components":{}}`,
 		`{"commit":"abc1234","app":"shop","protostrap":"one","spec":"x","components":{}}`,
 	} {

@@ -186,6 +186,9 @@ type ReplicaSpec struct {
 	Volume string `json:"volume,omitempty"`
 	// Backup is a stateful replica's command whose output is the backup.
 	Backup []string `json:"backup,omitempty"`
+	// LogGroup is the CloudWatch Logs group Docker sends the replica's output to, when the
+	// application runs no telemetry. Empty sends it to the telemetry collector on data-1.
+	LogGroup string `json:"log_group,omitempty"`
 
 	// SecretPrefix is the prefix of the component's keys in the environment's secret.
 	SecretPrefix string `json:"secret_prefix,omitempty"`

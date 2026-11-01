@@ -42,8 +42,8 @@ that is, so a component's whole footprint is in one place. There is no `iam.tf` 
 | `data.tf`         | The data VMs, data-1's control volume and the scheduler's config              |
 | `scheduler.tf`    | The scheduler's log group and permissions                                     |
 | `reporter.tf`     | The reporter's secret and permissions                                         |
-| `edge.tf`         | The Cloudflare tunnel, and the edge's repository, secret, log group and role  |
-| `cdn.tf`          | Cloudflare: DNS records, zone settings, rate limits and operator access      |
+| `edge.tf`         | The Cloudflare tunnel, if the spec has one, and the edge's repository, secret, log group and role |
+| `cdn.tf`          | Cloudflare: DNS records, zone settings, the spec's WAF rules, cache rules and rate limit, and operator access |
 | `components.tf`   | Each component's repository, secret, log group, role and volume               |
 | `queues.tf`       | Each queue and its dead-letter queue                                          |
 | `files.tf`        | The files bucket                                                              |
@@ -51,7 +51,7 @@ that is, so a component's whole footprint is in one place. There is no `iam.tf` 
 | `backups.tf`      | The backups bucket and volume snapshots                                       |
 | `deploy.tf`       | The deploy bucket's lifecycle rules, with the infra log's archive, the deploy SSM document and its log group |
 | `ui.tf`           | The operator UI's SSM session documents, one per role                         |
-| `telemetry.tf`    | Telemetry's volume, bucket, role, repository and Grafana's SSM session document |
+| `telemetry.tf`    | Telemetry's bucket, role and repository, and, if the spec has telemetry, its volume and Grafana's SSM session document |
 | `alerts.tf`       | The alerts topic and what feeds it                                            |
 | `templates/`      | User data and the systemd units it installs                                   |
 | `tests/`          | `terraform test` with mocked providers, for the sample's spec                 |
@@ -89,19 +89,23 @@ set on that environment with `gh secret set --env`.
 
 | Variable                       | Default        | Meaning                                                              |
 | ------------------------------ | -------------- | -------------------------------------------------------------------- |
-| `hosts`                        | the spec's     | Each of the spec's hosts' hostname in this account, by name: `{ app = "app.staging.example.com" }`. It names every host the spec has, and only those; it reaches the tunnel, DNS, CORS, the edge and every replica's `HOST_<NAME>` through `hosts.json` |
+| `hosts`                        | the spec's     | Each of the gateway's hosts' hostname in this account, by name: `{ app = "app.staging.example.com" }`. It names every host in the spec's `gateway.hosts`, and only those; it reaches the tunnel, DNS, CORS, the gateway and every replica's `HOST_<NAME>` through `hosts.json` |
 | `zones`                        | the first zone | Availability zones to run in, each with its own ingress VM and groups |
 | `vpc_cidr`                     | `10.20.0.0/16` | The VPC's range                                                       |
-| `operator_hosts`               | none           | Operator UIs, behind Cloudflare Access                               |
+| `operator_hosts`               | none           | Operator UIs, behind Cloudflare Access. They come in through the tunnel, so the spec needs `tunnel` |
 | `email_domains`                | the spec's     | The domains this account sends mail from: a second deployed environment uses its own ([Email](../docs/email.md#each-account)) |
 | `email_dmarc`                  | none           | The DMARC record for each email domain, for a domain that has none   |
-| `client_rate_limit`            | 0, none        | Requests per client per 10 seconds before Cloudflare blocks it        |
 | `retired_components`, `retired_queues` | none   | Components and queues removed from the spec but kept, so a rollback still works |
 | `retired_buckets`              | none           | Buckets removed from the spec but kept with their objects, each with the settings it had there |
 | `cors_origins`                 | none           | Origins besides the hosts whose browsers may use signed URLs on files and on `browser` buckets |
 | `protect_data_vms`             | true           | Stops data VMs being terminated. Turn off before destroying. Stateful components' volumes are always kept: a destroy leaves them in the account |
 | `force_destroy`                | false          | Lets a destroy delete buckets and repositories that aren't empty. Test environments only |
 | `log_retention_days`, `backup_retention_days` | | How long logs and backups are kept                                   |
+
+Cloudflare's rate limit, WAF rules and cache rules aren't settings of the root: they are the
+spec's [`cdn`](../docs/protostrap.md#cdn), scoped to the hostnames `hosts` gives. A root
+that set `client_rate_limit`, which is gone, moves it there as
+`cdn: { rate_limit: { requests: <it> } }`: its period was 10 seconds, still the default.
 
 
 ## Checking it offline

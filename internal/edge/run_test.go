@@ -251,3 +251,50 @@ func waitFor(t *testing.T, cond func() bool) {
 	}
 	t.Fatal("timed out")
 }
+
+// Without a tunnel, the edge runs Envoy alone: it waits for no token, starts no cloudflared,
+// and is ready once Envoy is.
+func TestRunWithoutATunnelRunsEnvoyAlone(t *testing.T) {
+	dir := t.TempDir()
+	log := filepath.Join(dir, "log")
+	envoy := script(t, `echo "envoy $*" >> `+log+`; trap 'echo envoy stopped >> `+log+`; exit 0' TERM; while :; do sleep 0.05; done`)
+	tunnel := script(t, `echo cloudflared >> `+log+`; while :; do sleep 0.05; done`)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- Run(ctx, Config{
+			Envoy: envoy, Cloudflared: tunnel, FilesDir: dir, BootstrapPath: filepath.Join(dir, "bootstrap.json"),
+			StatusAddr: "127.0.0.1:0", Drain: 50 * time.Millisecond,
+		})
+	}()
+	waitFor(t, func() bool {
+		b, _ := os.ReadFile(log)
+		return strings.Contains(string(b), "envoy -c")
+	})
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("Run: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run didn't return after the signal")
+	}
+	b, _ := os.ReadFile(log)
+	if got := string(b); strings.Contains(got, "cloudflared") || !strings.Contains(got, "envoy stopped") {
+		t.Errorf("log:\n%s", got)
+	}
+}
+
+func TestReadinessWithoutATunnelIsEnvoys(t *testing.T) {
+	var envoyReady, tunnelReady atomic.Bool
+	envoyURL, _ := upstreams(t, &envoyReady, &tunnelReady)
+	st := &status{envoyAdmin: envoyURL, client: http.DefaultClient}
+	if code, _ := get(t, st, "/ready", "edge"); code != 503 {
+		t.Errorf("ready before Envoy: %d", code)
+	}
+	envoyReady.Store(true)
+	if code, _ := get(t, st, "/ready", "edge"); code != 200 {
+		t.Errorf("not ready with Envoy up and no tunnel to wait for: %d", code)
+	}
+}

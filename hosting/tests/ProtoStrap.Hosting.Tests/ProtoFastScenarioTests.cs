@@ -92,18 +92,28 @@ public class ProtoFastScenarioTests
         const ReferenceEnvironmentInjectionFlags references =
             ReferenceEnvironmentInjectionFlags.ConnectionString | ReferenceEnvironmentInjectionFlags.ServiceDiscovery;
 
-        builder.AddProtoStrapEnvironment("protostrap", app: "protofast")
+        var protostrap = builder.AddProtoStrapEnvironment("protostrap", app: "protofast")
             .WithVersion("1.4.0")
-            .WithHost("app", "protofast.dev", local: "app.dev.localhost")
-            .WithHost("auth", "auth.protofast.dev", local: "auth.dev.localhost")
-            .WithHost("admin", "admin.protofast.dev", local: "admin.dev.localhost")
             .WithIngressPool(vm: "c8g.medium")
             .WithGeneralPool(vm: ["m7g.large", "m6g.large", "m8g.large", "m7gd.large"],
                 min: 1, max: 6, spare: 1, target: 0.70)
             .WithComputePool(vm: ["c7g.xlarge", "c6g.xlarge", "c8g.xlarge", "c7gd.xlarge"],
                 min: 0, max: 4)
-            .WithDataPool(vm: "m7g.xlarge", count: 1)
-            .WithEdge(cpu: "500m", memory: "256Mi");
+            .WithDataPool(vm: "m7g.xlarge", count: 1);
+        var gateway = protostrap.AddEnvoyGateway("gateway")
+            .WithHost("app", "protofast.dev", local: "app.dev.localhost")
+            .WithHost("auth", "auth.protofast.dev", local: "auth.dev.localhost")
+            .WithHost("admin", "admin.protofast.dev", local: "admin.dev.localhost")
+            .WithRequest(cpu: "500m", memory: "256Mi");
+        var tunnel = protostrap.AddCloudflareTunnel("tunnel", gateway);
+        protostrap.AddTelemetry("telemetry");
+        protostrap.AddCloudflareCdn("cdn", tunnel)
+            .WithRateLimit(requests: 300)
+            .WithWafRule("scanners", r => r.Paths("/wp-admin/", "/.env").Block())
+            .WithWafRule("admin-abroad", r => r.Hosts("admin").NotCountries("US", "CA").ManagedChallenge())
+            .WithWafRule("bots", r => r.Expression("http.user_agent contains \"sqlmap\"").Block())
+            .WithCacheRule("assets", r => r.Hosts("app").Paths("/assets/").Cache(edge: TimeSpan.FromDays(30), browser: TimeSpan.FromDays(1)))
+            .WithCacheRule("api", r => r.Paths("/api/").Bypass());
 
         var postgres = builder.AddPostgres("postgres")
             .PublishAsProtoStrapStateful(s => s
@@ -139,7 +149,7 @@ public class ProtoFastScenarioTests
                 .Request(cpu: "1000m", memory: "2Gi")
                 .Scale(min: 1, max: 4, demand => demand.Cpu(0.70)));
 
-        builder.AddProject("api", repo.PathOf("services/api/src/ProtoFast.Api/ProtoFast.Api.csproj"))
+        var api = builder.AddProject("api", repo.PathOf("services/api/src/ProtoFast.Api/ProtoFast.Api.csproj"))
             .WithReferenceEnvironment(references)
             .WithReference(redis).WaitFor(redis)
             .WithReference(protofastDb, connectionName: "protofast").WaitFor(protofastDb)
@@ -149,16 +159,16 @@ public class ProtoFastScenarioTests
             .WithEnvironment("Api_Sqs__DocumentImport__QueueName", "protofast-document-upload")
             .PublishAsProtoStrapService(s => s
                 .Request(cpu: "500m", memory: "512Mi")
-                .Routes("app/api/")
                 .Ready(Readiness.Grpc)
                 .Stop(TimeSpan.FromSeconds(30))
                 .Scale(min: 2, max: 10, demand => demand.Cpu(0.70)));
+        gateway.WithUpstream(api, u => u.Routes("app/api/"));
 
-        builder.AddProject("payments", repo.PathOf("services/payments/src/ProtoFast.Payments.Api/ProtoFast.Payments.Api.csproj"))
+        var payments = builder.AddProject("payments", repo.PathOf("services/payments/src/ProtoFast.Payments.Api/ProtoFast.Payments.Api.csproj"))
             .PublishAsProtoStrapService(s => s
                 .Request(cpu: "250m", memory: "256Mi")
-                .Routes("app/payments/")
                 .Ready(Readiness.Grpc));
+        gateway.WithUpstream(payments, u => u.Routes("app/payments/"));
 
         builder.AddProject("document-import",
                 repo.PathOf("services/document_import/src/ProtoFast.DocumentImport.Worker/ProtoFast.DocumentImport.Worker.csproj"))

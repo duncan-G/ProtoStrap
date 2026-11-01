@@ -190,7 +190,7 @@ so a change to the realm file never reaches one that exists.
 
 ### An Envoy of the application's own
 
-ProtoStrap's [edge](protostrap.md#edge) already reloads its routes without restarting. An
+ProtoStrap's [gateway](protostrap.md#gateway) already reloads its routes without restarting. An
 Envoy the application runs itself, behind the edge, does the same with config files:
 
 ```yaml

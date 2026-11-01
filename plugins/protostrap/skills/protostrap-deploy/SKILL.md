@@ -30,10 +30,11 @@ merge to main
   plan     protostrap check; the spec regenerated if an AppHost writes it; the images
            missing from ECR; whether the infra projection changed since the last apply
   infra    only if it changed, after prod-infra's own approval: Terraform applies
-           infra/prod (ECR repositories, roles, queues, buckets, DNS, VMs)
-  deploy   builds the missing images (arm64), copies ProtoStrap's binary, edge, telemetry
-           and upstream images, writes releases/<commit>.json, and has data-1's scheduler
-           roll it out, waiting for the result
+           infra/prod (ECR repositories, roles, queues, buckets, DNS, Cloudflare rules, VMs)
+  deploy   builds the missing images (arm64), copies ProtoStrap's binary, the edge and
+           telemetry images the spec runs, and upstream images, writes
+           releases/<commit>.json, and has data-1's scheduler roll it out, waiting for the
+           result
 ```
 
 The rollout: changed components replace a quarter of their replicas at a time, migrations
@@ -54,6 +55,8 @@ components aren't touched.
 | Something outside the Infra boundary, such as a managed database | An Org Admin widens bootstrap's `extra_infra_actions` and applies it      |
 | A migration                                         | It works with the previous release's code, which runs during the rollout and after a rollback |
 | A new ProtoStrap version                            | Every reference moved together (protostrap-setup's upgrade steps)              |
+| A `cdn` rule or rate limit                          | The infra job applies it, and nothing else changes. The Cloudflare token needs Zone WAF Edit for WAF rules and the rate limit, and Cache Rules Edit for cache rules: an Org Admin widens it in `prod-infra` first, or the infra job fails. The zone's plan must take the rules and period |
+| `tunnel: {}` added                                  | Plan the tunnel's token: once Terraform has made the tunnel, an Org Admin sets `Edge_TUNNEL_TOKEN` with `scripts/set-edge-token.sh` (protostrap-secrets), before the deploy. Without it the new edge waits for the token and never gets ready, so the release rolls back after 5 minutes and the old edge keeps serving |
 
 Write each first step in the pull request, with its commands, for whoever does it.
 
@@ -112,12 +115,14 @@ A green run means the release rolled out. To see that it serves:
 - **Its replicas run the commit:** in Grafana (protostrap-operate says how to open it),
   `{service_name="<component>"} | service_version="<commit>"` has lines, and none with
   errors since the rollout. (`service_version` is a filter after the braces, not a label
-  inside them.)
+  inside them.) Without the spec's `telemetry`, an Org Admin reads its CloudWatch log group
+  instead.
 - **The scheduler agrees** (Platform and Org Admins):
   `curl -s 'http://localhost:7480/api/logs?source=scheduler&q=release&since=2h&format=text'`
   shows `release finished`, and `/api/status` the commit as the release.
-- **It answers:** a request to a route it serves, from outside. Not its `ready` path: that
-  answers only for its own name on the overlay, so from outside it returns 503.
+- **It answers:** a request to a route it serves, from outside, when the spec has a tunnel.
+  Not its `ready` path: that answers only for its own name on the overlay, so from outside
+  it returns 503.
 
 ## A new component's first deploy
 
@@ -129,7 +134,8 @@ A green run means the release rolled out. To see that it serves:
   never a manual step on data-1.
 - **A worker with `min: 0` stays at zero until its queue has jobs.** That is deployed, not
   broken.
-- Routes reach it once it is ready; the edge reloads them without a restart.
+- Its `gateway.upstreams` routes reach it once it is ready; the gateway reloads them without
+  a restart.
 
 ## Deploying again
 
@@ -145,6 +151,6 @@ Prod waits for its approval every time.
 | Job       | Usually                                                                        | Go to                                  |
 | --------- | ------------------------------------------------------------------------------ | -------------------------------------- |
 | `plan`    | `protostrap check` names a rule the spec breaks, or the committed spec isn't what the AppHost writes | protostrap-spec, protostrap-aspire |
-| `infra`   | AccessDenied: the change needs an Org Admin's bootstrap change; or Cloudflare's token | protostrap-operate's symptoms   |
+| `infra`   | AccessDenied: the change needs an Org Admin's bootstrap change; or Cloudflare's token or plan, for a `cdn` rule | protostrap-operate's symptoms   |
 | `build`   | The Dockerfile, a native dependency without an arm64 build, a missing `global.json`, a file outside `sources` | protostrap-contract's "The image" |
 | `deploy`  | Rolled back: a replica not ready in 5 minutes, a migration or configure task that failed, a missing key | protostrap-operate |

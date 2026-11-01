@@ -1,6 +1,6 @@
 # Telemetry (docs/telemetry.md) is ProtoStrap's own replica on data-1: an OpenTelemetry
-# collector, Loki, Tempo, Prometheus and Grafana, in the protostrap/telemetry image. This
-# file makes what it needs:
+# collector, Loki, Tempo, Prometheus and Grafana, in the protostrap/telemetry image, which
+# runs when the spec has a telemetry section. This file makes what it needs:
 #
 #   - its EBS volume on data-1, mounted at /data/telemetry like a stateful component's, for
 #     Prometheus's metrics and Loki's and Tempo's write-ahead logs;
@@ -14,6 +14,11 @@
 #
 # Docker on every VM sends replicas' output to data-1's address, port 24224, which the node
 # security group admits between VMs (network.tf).
+#
+# Without telemetry, the volume, its port and the session document go: replicas' output
+# goes to their log groups instead. The bucket, role and repository stay, as a retired
+# component's do: removing telemetry never fails on a bucket with logs in it, and its
+# lifecycle rule expires them.
 
 resource "aws_ecr_repository" "telemetry" {
   name                 = "protostrap/telemetry"
@@ -28,6 +33,7 @@ resource "aws_ecr_repository" "telemetry" {
 # The volume outlives the VM, and is snapshotted daily with the others (backups.tf). Unlike a
 # stateful component's, losing it loses only the metrics' history, so it may be destroyed.
 resource "aws_ebs_volume" "telemetry" {
+  count             = local.has_telemetry ? 1 : 0
   availability_zone = local.zones[0]
   size              = local.telemetry.volume
   type              = "gp3"
@@ -41,8 +47,9 @@ resource "aws_ebs_volume" "telemetry" {
 }
 
 resource "aws_volume_attachment" "telemetry" {
+  count       = local.has_telemetry ? 1 : 0
   device_name = "/dev/sdy"
-  volume_id   = aws_ebs_volume.telemetry.id
+  volume_id   = aws_ebs_volume.telemetry[0].id
   instance_id = aws_instance.data["data-1"].id
 }
 
@@ -163,6 +170,7 @@ resource "aws_iam_role_policy" "telemetry" {
 # document a person may start is what they see (infra/people). The port is the scheduler's
 # default, telemetry_listen, which Terraform doesn't write into scheduler.json.
 resource "aws_ssm_document" "telemetry" {
+  count           = local.has_telemetry ? 1 : 0
   name            = "protostrap-telemetry"
   document_type   = "Session"
   document_format = "JSON"
@@ -186,4 +194,21 @@ resource "aws_ssm_document" "telemetry" {
       localPortNumber = "{{ localPortNumber }}"
     }
   })
+}
+
+# The volume and the session document were made unconditionally before the spec could leave
+# telemetry out.
+moved {
+  from = aws_ebs_volume.telemetry
+  to   = aws_ebs_volume.telemetry[0]
+}
+
+moved {
+  from = aws_volume_attachment.telemetry
+  to   = aws_volume_attachment.telemetry[0]
+}
+
+moved {
+  from = aws_ssm_document.telemetry
+  to   = aws_ssm_document.telemetry[0]
 }

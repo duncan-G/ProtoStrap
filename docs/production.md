@@ -247,7 +247,6 @@ module "protostrap" {
   log_retention_days    = 90
   backup_retention_days = 35
   snapshot_retention    = 14
-  client_rate_limit     = 300 # requests per client per 10 seconds; size it from real traffic
 }
 ```
 
@@ -270,11 +269,19 @@ are safe to change later. These are not:
 - **Survive a VM loss.** A service that must stay up needs `scale.min: 2`, and its pool at
   least two VMs (`min` plus `spare`), so its replicas spread across them.
 - **Size the data VM** so PostgreSQL's and Redis's requests fit with room to grow, beside
-  the telemetry replica's. Resizing it later takes them offline for a few minutes, in a
-  maintenance window.
-- **Set telemetry's retention** for what prod must keep, and its `volume` for that many
-  days of metrics ([Telemetry settings](telemetry.md#settings)). Retention can change
-  later; the volume, like every volume, only grows.
+  the telemetry replica's if the spec has telemetry. Resizing it later takes them offline
+  for a few minutes, in a maintenance window.
+- **Decide on telemetry.** With `telemetry` in the spec, set its retention for what prod
+  must keep, and its `volume` for that many days of metrics
+  ([Telemetry settings](telemetry.md#settings)). Retention can change later; the volume,
+  like every volume, only grows. Without telemetry, replicas' output goes to CloudWatch
+  Logs ([Without telemetry](telemetry.md#without-telemetry)).
+- **Set a rate limit** at Cloudflare, sized from real traffic, in the spec's
+  [`cdn`](protostrap.md#cdn): `rate_limit: { requests: 300, period: 1m }`, or the AppHost's
+  `WithRateLimit(requests: 300, period: TimeSpan.FromMinutes(1))`. Add WAF rules for what
+  should never reach the application, and cache rules for its static assets. The zone's
+  Cloudflare plan decides how many rules and which periods it takes: the free plan allows
+  only the 10-second period.
 - **Set every maximum** knowingly: a pool's `max` is also the most it can cost.
 - **Pin `image` tags** for PostgreSQL and Redis to exact versions.
 
@@ -290,7 +297,8 @@ components in both in the same pull request.
 ### The reporter
 
 The daily report sends the facts it extracts from the logs, including the first line of
-each common error from telemetry's Loki, to Anthropic's API. Error lines can carry user
+each common error from telemetry's Loki, or from CloudWatch Logs without telemetry, to
+Anthropic's API. Error lines can carry user
 data. Decide whether
 that is acceptable before setting `ANTHROPIC_API_KEY` in prod's `protostrap/reporter`;
 without the key, nothing leaves the account and the report is the facts alone.
@@ -346,8 +354,8 @@ The same steps as the sample's walkthrough, in the application's account, by an 
    database (`pg_dump --data-only`), upload it to the backups bucket, and pipe it into the
    live PostgreSQL the way [Restoring a backup](#restoring-a-backup) pipes one into a
    scratch one.
-3. **Test it on a host of its own first,** such as a `next` host in the spec, which prod's
-   `hosts` maps to `new.example.com`: smoke tests,
+3. **Test it on a host of its own first,** such as a `next` host in the spec's
+   `gateway.hosts`, which prod's `hosts` maps to `new.example.com`: smoke tests,
    then a load test up to the traffic you expect, which also proves the service quotas.
 4. **Move the real host.** The platform creates each host's DNS record, and Cloudflare
    refuses a second record with the same name. Either delete the old record and apply at

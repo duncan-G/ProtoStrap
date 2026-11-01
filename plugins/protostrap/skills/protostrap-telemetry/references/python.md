@@ -17,17 +17,19 @@ variables:
 CMD ["opentelemetry-instrument", "python", "main.py"]
 ```
 
-- With `OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf`, which ProtoStrap sets, it picks the HTTP
-  exporter, so `opentelemetry-exporter-otlp-proto-http` must be installed. Without the
-  variable the distro picks gRPC, and with only the HTTP exporter installed it starts with no
-  telemetry: under `aspire run`, give the container `WithOtlpExporter(OtlpProtocol.HttpProtobuf)`.
+- With `OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf`, which ProtoStrap sets with telemetry, it
+  picks the HTTP exporter, so `opentelemetry-exporter-otlp-proto-http` must be installed.
+  Without the variable the distro picks gRPC, and with only the HTTP exporter installed it
+  starts with no telemetry: under `aspire run`, give the container
+  `WithOtlpExporter(OtlpProtocol.HttpProtobuf)`.
 - **Keep one process per replica.** Uvicorn's `--workers` and gunicorn fork after the SDK
   starts, and forked workers need extra setup to export. ProtoStrap scales replicas instead.
 - **Leave out the readiness path and metrics:**
   `OTEL_PYTHON_FASTAPI_EXCLUDED_URLS=healthz,metrics` in the spec's `env` (each instrumentation
   has its own `..._EXCLUDED_URLS`).
-- Locally, without `OTEL_EXPORTER_OTLP_ENDPOINT`, run `python main.py` as before, or set
-  `OTEL_TRACES_EXPORTER=none` and `OTEL_METRICS_EXPORTER=none`.
+- Without `OTEL_EXPORTER_OTLP_ENDPOINT`, locally, run `python main.py` as before, or set
+  `OTEL_TRACES_EXPORTER=none` and `OTEL_METRICS_EXPORTER=none`; under a spec without
+  `telemetry`, set those two in its `env`.
 
 ## Logs
 
@@ -98,4 +100,4 @@ for message in response.get("Messages", []):
 
 A `metric` signal or limit reads Prometheus text from the spec's `metrics` endpoint, not
 OTLP. ProtoStrap's `sample/services/py/main.py` serves `py_requests_total` at `/metrics`.
-Prefer a port of its own, so the edge's routes and the scrape don't share a server.
+Prefer a port of its own, so the gateway's routes and the scrape don't share a server.

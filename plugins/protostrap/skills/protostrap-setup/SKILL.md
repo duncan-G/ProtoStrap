@@ -62,7 +62,13 @@ grep -rnF --exclude-dir={.git,.protostrap,.terraform,bin,obj,node_modules} '0.1.
 
 1. **Write the spec** (protostrap-spec skill) or the AppHost (protostrap-aspire skill). `app`
    is short and lowercase: it names the secret, `<app>/<environment>`, and the log groups.
-   Leave `hosts` out when they differ per account, and route by path.
+   Add `tunnel: {}`, `gateway` and `telemetry: {}` (with Aspire, `AddCloudflareTunnel`,
+   `AddEnvoyGateway` and `AddTelemetry`) for what the application uses: each runs only when
+   present, and an application served from the internet needs the first two. Its own
+   Cloudflare rules, a rate limit, WAF rules and cache rules, are the spec's `cdn`
+   (`AddCloudflareCdn`), which needs the tunnel.
+   Name each host in `gateway.hosts`, and route by those names: each account's platform root
+   gives every name its hostname there with `hosts`.
 2. **Make the code keep the contract** (protostrap-contract skill).
 3. **Add the Terraform roots** for prod, from the templates: a bootstrap root (`app`,
    `environment`, `github_repository`, the platform's `infra_variables`), a platform root
@@ -98,14 +104,15 @@ grep -rnF --exclude-dir={.git,.protostrap,.terraform,bin,obj,node_modules} '0.1.
       If the account already has GitHub's OIDC provider, set
       `create_github_oidc_provider = false` in the module.
    3. `gh secret set CLOUDFLARE_API_TOKEN --env prod-infra` (a token scoped to prod's zone;
-      its permissions: ProtoStrap's `sample/README.md#what-you-need`).
+      its permissions: ProtoStrap's `sample/README.md#what-you-need`, with Zone WAF and
+      Cache Rules if the spec's `cdn` has rules of those kinds).
    4. In GitHub, before anything deploys: `prod-approval` created by hand with required
       reviewers, required reviewers on `prod-infra`, and all three environments limited to
       `main`.
    5. `gh workflow run infra.yml -f action=plan`, then `-f action=apply`. Then confirm the
       alert emails.
-   6. Secrets: the tunnel's token with ProtoStrap's script, with `CLOUDFLARE_ACCOUNT_ID`,
-      `CLOUDFLARE_API_TOKEN`, `AWS_PROFILE` and `AWS_REGION` set:
+   6. Secrets: with a tunnel in the spec, its token with ProtoStrap's script, with
+      `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN`, `AWS_PROFILE` and `AWS_REGION` set:
       `../ProtoStrap/scripts/set-edge-token.sh <app> prod` (or `.protostrap/scripts/…`). Then
       every key in `<app>/prod` (protostrap-secrets skill), PostgreSQL's and Redis's
       passwords included.
@@ -119,13 +126,13 @@ ProtoStrap's `docs/production.md` in order; in the repository that means:
 
 - **`infra/prod/main.tf`** keeps `protect_data_vms` (true) and `force_destroy` (false) at
   their defaults, and sets retentions (`log_retention_days = 90`,
-  `backup_retention_days = 35`, `snapshot_retention = 14`) and `client_rate_limit`.
-  `vpc_cidr` can't change later.
+  `backup_retention_days = 35`, `snapshot_retention = 14`). `vpc_cidr` can't change later.
 - **GitHub:** required reviewers on `prod-approval` and `prod-infra`; `prod-approval`, `prod`
   and `prod-infra` limited to `main`; a ruleset on `main` requiring review and `ci`;
   `CODEOWNERS` for `protostrap.yaml` and `infra/`.
 - **The spec:** services that must stay up have `min: 2`; the data VM fits PostgreSQL and Redis
-  with room; every `max` is chosen knowingly; images pinned.
+  with room; every `max` is chosen knowingly; images pinned; a rate limit in `cdn`
+  (`WithRateLimit` with Aspire), sized from real traffic, within the zone's Cloudflare plan.
 - **Base images pinned by digest** (protostrap-contract's "The image").
 - **Dead-letter alarms** per queue in `infra/prod/main.tf`, an outside uptime check, and an
   AWS Budget: ProtoStrap creates none of them.
@@ -151,7 +158,9 @@ of `infra/bootstrap` and `infra/prod` with its `environment`, and:
 1. **Read what changed** between the two tags: ProtoStrap's commits and `docs/` diff
    (`git -C ../ProtoStrap log --oneline v0.1.0..v0.2.0 -- docs infra .github hosting` or the
    compare view on GitHub). Look for new required inputs, renamed variables, and upgrade
-   sections such as `docs/secrets.md#upgrading`.
+   sections such as `docs/secrets.md#upgrading`. A root's `client_rate_limit` is gone after
+   0.1.1: it becomes the spec's `cdn: { rate_limit: { requests: <it> } }` (`WithRateLimit`),
+   with the same 10-second period by default.
 2. **Change every reference in one pull request** (the table above), regenerate the spec if an
    AppHost writes it, and run `protostrap check` with the new version's CLI.
 3. **Do the migration steps** the docs name, in their order. Some need an Org Admin before
