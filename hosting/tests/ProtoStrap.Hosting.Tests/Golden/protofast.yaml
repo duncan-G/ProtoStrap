@@ -94,7 +94,7 @@ components:
     sources:
       - ":(exclude,glob)services/conversion/tests"
       - ":(exclude,glob)services/conversion/tests/**"
-    pool: compute
+    pool: general
     request: { cpu: 1000m, memory: 2Gi }
     port: 8090
     ready: /healthz

@@ -53,7 +53,6 @@ public class ComponentKindTests
         var api = builder.AddProject("api", repo.Project("services/api/Api.csproj", "Microsoft.NET.Sdk.Web"))
             .WithHttpEndpoint(targetPort: 8080, name: "http")
             .PublishAsProtoStrapService(s => s
-                .Pool(Pool.Compute)
                 .Request(cpu: "1", memory: "1Gi")
                 .Ready("/ready")
                 .Metrics(port: 9090, path: "/metrics")
@@ -73,7 +72,7 @@ public class ComponentKindTests
               sources:
                 - global.json
                 - services/api
-              pool: compute
+              pool: general
               request: { cpu: 1000m, memory: 1Gi }
               port: 8080
               ready: /ready

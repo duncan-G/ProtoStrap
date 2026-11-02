@@ -85,10 +85,10 @@ added to the model in run mode, so `aspire run` is unchanged.
 | `cdn.WithWafRule(name, r => ...)`             | An item of `waf`: what it matches, with `Hosts`, `Paths`, `Extensions`, `Methods`, `Countries`, `NotCountries`, `Ips`, `NotIps` and `Expression`, and its action, `Block()`, `ManagedChallenge()`, `JsChallenge()`, `Challenge()` or `Skip()`. The first rule that matches acts |
 | `cdn.WithCacheRule(name, r => ...)`           | An item of `cache`: what it matches, as a WAF rule does, and `Cache(edge:, browser:)` for TTLs over the origin's, or `Bypass()`. Every rule that matches applies |
 | `.AddTelemetry(name)`                         | `telemetry`, with what `WithRequest`, `WithVolume` and `WithRetention` set, or `{}`. It runs only in an account; without it, replicas' output goes to CloudWatch Logs ([Telemetry](../docs/telemetry.md#without-telemetry)) |
-| `PublishAsProtoStrapService(...)`             | `kind: service`: `Pool`, `Request`, `Ready`, `Metrics`, `Stop`, `Scale`, `SecretFiles` |
+| `PublishAsProtoStrapService(...)`             | `kind: service`: `Request`, `Ready`, `Metrics`, `Stop`, `Scale`, `SecretFiles` |
 | `PublishAsProtoStrapWorker(...)`              | `kind: worker`: `Pool`, `Request`, `Metrics`, `Stop`, `Scale`, `SecretFiles` |
 | `PublishAsProtoStrapStateful(...)`            | `kind: stateful`: `Vm`, `Request`, `Volume`, `Backup`, `Command`, `Metrics`, `Stop`, `SecretFiles` |
-| `PublishAsProtoStrapTask(...)`                | `kind: task`: `Pool`, `Request`, `Stop`, `SecretFiles`                  |
+| `PublishAsProtoStrapTask(...)`                | `kind: task`: `Request`, `Stop`, `SecretFiles`                          |
 | `.SecretFiles(onChange)`                      | `secret_files: true`, and `on_secret_change` from `SecretChange.Reload` or `SecretChange.Run(...)`: the keys as files in `/run/secrets`, for an image that can't read the secret |
 | `AddProtoStrapQueue(name, fifo: ...)`         | An entry under `queues`                                                 |
 | `AddProtoStrapBucket(name, browser: ..., versions: ..., locked: ..., expire: ...)` | An entry under `buckets` |

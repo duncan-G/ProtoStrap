@@ -674,7 +674,9 @@ func (c *checker) component(comp *Component, exportsMetrics bool) {
 			c.add(f("pool"), "required: general or compute")
 		case "general":
 		case "compute":
-			if s.Pools.Compute == nil {
+			if comp.Kind != api.KindWorker {
+				c.add(f("pool"), "only a worker runs in compute: a %s runs in general", comp.Kind)
+			} else if s.Pools.Compute == nil {
 				c.add(f("pool"), "the spec has no compute pool")
 			}
 		default:

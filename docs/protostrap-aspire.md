@@ -254,10 +254,10 @@ builder.AddProject<Projects.ProtoFast_DocumentImport_Worker>("document-import")
 
 | Method                        | Kind     | Settings                                                            |
 | ----------------------------- | -------- | ------------------------------------------------------------------- |
-| `PublishAsProtoStrapService`  | service  | `pool`, `request`, `ready`, `metrics`, `stop`, `scale`, `secret_files` |
+| `PublishAsProtoStrapService`  | service  | `request`, `ready`, `metrics`, `stop`, `scale`, `secret_files`      |
 | `PublishAsProtoStrapWorker`   | worker   | `pool`, `request`, `metrics`, `stop`, `scale`, `secret_files`       |
 | `PublishAsProtoStrapStateful` | stateful | `vm`, `request`, `volume`, `backup`, `secret_files`                 |
-| `PublishAsProtoStrapTask`     | task     | `pool`, `request`, `secret_files` (see [Migrations as tasks](#migrations-as-tasks)) |
+| `PublishAsProtoStrapTask`     | task     | `request`, `secret_files` (see [Migrations as tasks](#migrations-as-tasks)) |
 
 The rest of each component, from its build to its `uses`, `env` and `secrets`, comes from the
 app model (see [Mapping](#mapping)). A service's routes, protocol and authorizer are the
