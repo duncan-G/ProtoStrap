@@ -258,9 +258,11 @@ func (s *Scheduler) reconcileScaled(tgt *target, c *spec.Component, open bool, n
 		if r.Component != c.Name || r.Kind == api.KindTask || !r.live() {
 			continue
 		}
+		// The pool isn't in the fingerprint: a replica takes the release's, and moves if outside it.
+		s.repool(r, c.Pool)
 		// A replica on a VM being drained counts as old: it is replaced, then stopped. So does
 		// one without its component's keys.
-		if r.Fingerprint == fp && s.keysCurrent(r) && !s.draining(r.VM) {
+		if r.Fingerprint == fp && s.keysCurrent(r) && !s.draining(r.VM) && s.inPool(r) {
 			cur = append(cur, r)
 		} else {
 			old = append(old, r)
@@ -296,6 +298,21 @@ func (s *Scheduler) reconcileScaled(tgt *target, c *spec.Component, open bool, n
 			s.stop(r, "scaled in")
 		}
 	}
+}
+
+// repool puts a replica in its component's pool, an ephemeral one if it is a compute worker
+// on a general VM.
+func (s *Scheduler) repool(r *Replica, pool string) {
+	r.Pool = pool
+	if vm := s.st.vms[r.VM]; vm != nil {
+		r.Ephemeral = r.Kind == api.KindWorker && vm.Pool == "general" && pool == "compute"
+	}
+}
+
+// inPool reports whether a replica runs in its pool, or is waiting for a VM there.
+func (s *Scheduler) inPool(r *Replica) bool {
+	vm := s.st.vms[r.VM]
+	return vm == nil || vm.Pool == r.Pool || r.Ephemeral
 }
 
 // draining reports whether a VM is on its way out: cordoned, or being terminated by AWS.

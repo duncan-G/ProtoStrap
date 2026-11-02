@@ -173,6 +173,28 @@ func TestVMsAreRemovedOneAtATime(t *testing.T) {
 	}
 }
 
+func TestAPoolChangeMovesReplicasAndTheOldPoolScalesIn(t *testing.T) {
+	h := newHarness(t)
+	// One worker too big for general's room, so it runs on a compute VM.
+	inCompute := strings.NewReplacer(
+		"    spare: 1\n", "    spare: 0\n",
+		"request: { cpu: 1000m, memory: 1Gi }", "request: { cpu: 3000m, memory: 1Gi }",
+		"      min: 0\n      max: 12\n", "      min: 1\n      max: 1\n").Replace(testSpec)
+	h.deploy("c1", inCompute, nil)
+	h.until("the first release finishes", 10*time.Minute, func() bool { return h.rollout("c1") == RolloutDone })
+	if ids := h.running("worker"); len(ids) != 1 || h.agentOf(ids[0]).pool != "compute" {
+		t.Fatalf("the worker runs %v, want one replica on a compute VM", ids)
+	}
+
+	// The fingerprint doesn't change, but the worker belongs in general now.
+	h.deploy("c2", strings.Replace(inCompute, "    pool: compute\n", "    pool: general\n", 1), nil)
+	h.until("the worker moves to general", 10*time.Minute, func() bool {
+		ids := h.running("worker")
+		return len(ids) == 1 && h.agentOf(ids[0]).pool == "general" && h.runningReady("worker") == 1
+	})
+	h.until("compute scales in", 15*time.Minute, func() bool { return len(h.vms("compute")) == 0 })
+}
+
 func TestASilentAgentsReplicasAreReplaced(t *testing.T) {
 	// This follows docs/protostrap.md#lose-a-vm.
 	h := newHarness(t)
