@@ -97,9 +97,9 @@ match:
 
 | Where                                     | Form                                                             |
 | ----------------------------------------- | ---------------------------------------------------------------- |
-| The spec                                  | `protostrap: 0.1.8`                                              |
-| The application's workflows               | `uses: duncan-G/protostrap/.github/workflows/deploy.yml@v0.1.8`, with `protostrap-ref: v0.1.8` |
-| The application's Terraform roots         | `source = "github.com/duncan-G/protostrap//infra/platform?ref=v0.1.8"` |
+| The spec                                  | `protostrap: 0.1.9`                                              |
+| The application's workflows               | `uses: duncan-G/protostrap/.github/workflows/deploy.yml@v0.1.9`, with `protostrap-ref: v0.1.9` |
+| The application's Terraform roots         | `source = "github.com/duncan-G/protostrap//infra/platform?ref=v0.1.9"` |
 
 
 ## 4. Accounts and people
@@ -182,25 +182,25 @@ jobs:
 
   plan:
     needs: approve
-    uses: duncan-G/protostrap/.github/workflows/plan.yml@v0.1.8
-    with: { environment: prod, protostrap-ref: v0.1.8 }
+    uses: duncan-G/protostrap/.github/workflows/plan.yml@v0.1.9
+    with: { environment: prod, protostrap-ref: v0.1.9 }
 
   infra:
     needs: plan
     if: needs.plan.outputs.infra-changed == 'true'
-    uses: duncan-G/protostrap/.github/workflows/infra.yml@v0.1.8
-    with: { environment: prod, directory: infra/prod, action: apply, protostrap-ref: v0.1.8 }
+    uses: duncan-G/protostrap/.github/workflows/infra.yml@v0.1.9
+    with: { environment: prod, directory: infra/prod, action: apply, protostrap-ref: v0.1.9 }
     secrets: inherit
 
   deploy:
     needs: [plan, infra]
     if: always() && needs.plan.result == 'success' && (needs.infra.result == 'success' || needs.infra.result == 'skipped')
-    uses: duncan-G/protostrap/.github/workflows/deploy.yml@v0.1.8
+    uses: duncan-G/protostrap/.github/workflows/deploy.yml@v0.1.9
     with:
       environment: prod
       version: ${{ needs.plan.outputs.version }}
       builds: ${{ needs.plan.outputs.builds }}
-      protostrap-ref: v0.1.8
+      protostrap-ref: v0.1.9
 ```
 
 The plan and deploy jobs run in the `prod` GitHub environment, and infra in `prod-infra`.
@@ -235,7 +235,7 @@ settings. Leave `protect_data_vms` and `force_destroy` at their defaults, true a
 
 ```hcl
 module "protostrap" {
-  source = "github.com/duncan-G/protostrap//infra/platform?ref=v0.1.8"
+  source = "github.com/duncan-G/protostrap//infra/platform?ref=v0.1.9"
 
   spec                  = file("${path.module}/../../protostrap.yaml")
   environment           = "prod"
