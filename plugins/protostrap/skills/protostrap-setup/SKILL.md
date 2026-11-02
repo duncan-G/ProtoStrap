@@ -45,17 +45,17 @@ Every reference names the same version. **Never point one at a branch, and never
 
 | Where                               | Form                                                                  |
 | ----------------------------------- | --------------------------------------------------------------------- |
-| The spec                            | `protostrap: 0.1.6` (from `WithVersion("0.1.6")` with Aspire)         |
-| Every reusable workflow call        | `uses: duncan-G/protostrap/.github/workflows/<name>.yml@v0.1.6` and `protostrap-ref: v0.1.6` |
-| CI's ProtoStrap checkout            | `ref: v0.1.6`                                                         |
-| Every Terraform root                | `source = "github.com/duncan-G/protostrap//infra/<module>?ref=v0.1.6"` |
-| ProtoStrap.Hosting (Aspire only)    | A checkout at `v0.1.6`, or `PackageReference … Version="0.1.6"` once published |
-| The Claude plugin, if pinned        | `.claude/settings.json`: the marketplace's `"ref": "v0.1.6"`          |
+| The spec                            | `protostrap: 0.1.7` (from `WithVersion("0.1.7")` with Aspire)         |
+| Every reusable workflow call        | `uses: duncan-G/protostrap/.github/workflows/<name>.yml@v0.1.7` and `protostrap-ref: v0.1.7` |
+| CI's ProtoStrap checkout            | `ref: v0.1.7`                                                         |
+| Every Terraform root                | `source = "github.com/duncan-G/protostrap//infra/<module>?ref=v0.1.7"` |
+| ProtoStrap.Hosting (Aspire only)    | A checkout at `v0.1.7`, or `PackageReference … Version="0.1.7"` once published |
+| The Claude plugin, if pinned        | `.claude/settings.json`: the marketplace's `"ref": "v0.1.7"`          |
 
 Find them all by the current version itself, then read each hit:
 
 ```bash
-grep -rnF --exclude-dir={.git,.protostrap,.terraform,bin,obj,node_modules} '0.1.6' .
+grep -rnF --exclude-dir={.git,.protostrap,.terraform,bin,obj,node_modules} '0.1.7' .
 ```
 
 ## Adding ProtoStrap to an application
