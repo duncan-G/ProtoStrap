@@ -165,15 +165,32 @@ func TestEveryComponentsReplicasGetTheOTELVariables(t *testing.T) {
 		t.Errorf("the spec's env is still there: %v", s.Env)
 	}
 
-	// ProtoStrap's own replicas get none: they don't use OpenTelemetry's SDK, and the
-	// collector must not export to itself.
+	// ProtoStrap's own replicas don't use OpenTelemetry's SDK, and the collector must not
+	// export to itself. The edge gets only its resource attributes, which Envoy reads: its
+	// collector is in its files.
 	for _, component := range []string{"edge", "telemetry"} {
 		for _, id := range h.running(component) {
-			for k := range h.specOf(id).Env {
-				if strings.HasPrefix(k, "OTEL_") {
+			for k, v := range h.specOf(id).Env {
+				if component == "edge" && k == "OTEL_RESOURCE_ATTRIBUTES" {
+					if want := "service.instance.id=" + id + ",service.version=c1,deployment.environment.name=dev"; v != want {
+						t.Errorf("%s: %s = %q, want %q", id, k, v, want)
+					}
+				} else if strings.HasPrefix(k, "OTEL_") {
 					t.Errorf("%s got %s", id, k)
 				}
 			}
+		}
+	}
+	if len(h.running("edge")) == 0 {
+		t.Fatal("no edge running")
+	}
+	routes := ""
+	for _, v := range h.vms("ingress")[0].assignment.Files {
+		routes += v
+	}
+	for _, want := range []string{`"envoy.access_loggers.open_telemetry"`, `"envoy.tracers.opentelemetry"`, `"address": "telemetry"`, `"port_value": 4317`} {
+		if !strings.Contains(routes, want) {
+			t.Errorf("the edge's files lack %s", want)
 		}
 	}
 }

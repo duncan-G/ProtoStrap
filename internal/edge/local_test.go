@@ -178,7 +178,8 @@ func TestALocalGRPCCheckDoesntNameTheService(t *testing.T) {
 // The local gateway logs each request it routes to its console, the AppHost's dashboard, so a
 // developer sees what the edge did with it: the host and path (without the query, which may
 // hold a sign-in's code), where it went, and Envoy's response flags, such as UAEX for a request
-// the authorizer refused or NR for one no route matched. An account's edge logs nothing.
+// the authorizer refused or NR for one no route matched. So does an account's edge without
+// telemetry, whose stdout goes to CloudWatch.
 func TestTheLocalEdgeLogsEachRequest(t *testing.T) {
 	r := local()
 	r.Local = true
@@ -193,7 +194,59 @@ func TestTheLocalEdgeLogsEachRequest(t *testing.T) {
 			t.Errorf("the local edge's listener lacks %s:\n%s", want, got)
 		}
 	}
-	if lds := Files(local())["edge/lds.json"]; strings.Contains(lds, "access_log") {
-		t.Errorf("an account's edge logs each request")
+	if lds := Files(local())["edge/lds.json"]; !strings.Contains(lds, "envoy.access_loggers.stdout") {
+		t.Errorf("an account's edge without telemetry doesn't log each request")
+	}
+}
+
+// With telemetry, the edge sends each request's log record and span to the collector over
+// gRPC, naming its replica from OTEL_RESOURCE_ATTRIBUTES. An account's edge then writes no
+// line to stdout, which would reach Loki a second time; the local one still does, for its
+// console.
+func TestTheEdgeSendsItsRequestsToTelemetry(t *testing.T) {
+	r := local()
+	r.Telemetry = &Telemetry{Address: "telemetry:4317"}
+	lds := jsonOf(decode(t, Files(r)["edge/lds.json"]))
+	cds := jsonOf(decode(t, Files(r)["edge/cds.json"]))
+	for _, want := range []string{
+		`"name":"envoy.access_loggers.open_telemetry"`,
+		`"name":"envoy.tracers.opentelemetry"`,
+		`"service_name":"edge"`,
+		`"name":"envoy.tracers.opentelemetry.resource_detectors.environment"`,
+		`"envoy_grpc":{"authority":"telemetry","cluster_name":"protostrap_telemetry"}`,
+		`"key":"url.path","value":{"string_value":"%PATH(NQ:ORIG_OR_PATH)%"}`,
+	} {
+		if !strings.Contains(lds, want) {
+			t.Errorf("the listener lacks %s:\n%s", want, lds)
+		}
+	}
+	if strings.Contains(lds, "envoy.access_loggers.stdout") {
+		t.Errorf("an account's edge with telemetry logs each request to stdout too")
+	}
+	for _, want := range []string{`"name":"protostrap_telemetry"`, `"address":"telemetry","port_value":4317`, `"http2_protocol_options":{}`} {
+		if !strings.Contains(cds, want) {
+			t.Errorf("the clusters lack %s:\n%s", want, cds)
+		}
+	}
+	if strings.Contains(cds, "transport_socket") || strings.Contains(lds, "x-forwarded-proto") {
+		t.Errorf("ProtoStrap's collector takes plain gRPC")
+	}
+
+	// The dashboard under `aspire run`: TLS with its development certificate, its key, and
+	// the gateway's own name.
+	r.Local = true
+	r.Telemetry = &Telemetry{Address: "host.docker.internal:21251", TLS: true,
+		Headers: map[string]string{"x-otlp-api-key": "k"}, Service: "gateway"}
+	lds = jsonOf(decode(t, Files(r)["edge/lds.json"]))
+	cds = jsonOf(decode(t, Files(r)["edge/cds.json"]))
+	for _, want := range []string{`"name":"envoy.access_loggers.stdout"`, `"initial_metadata":[{"key":"x-forwarded-proto","value":"https"},{"key":"x-otlp-api-key","value":"k"}]`, `"service_name":"gateway"`} {
+		if !strings.Contains(lds, want) {
+			t.Errorf("the local listener lacks %s:\n%s", want, lds)
+		}
+	}
+	for _, want := range []string{`"sni":"host.docker.internal"`, `"alpn_protocols":["h2"]`} {
+		if !strings.Contains(cds, want) {
+			t.Errorf("the local clusters lack %s:\n%s", want, cds)
+		}
 	}
 }

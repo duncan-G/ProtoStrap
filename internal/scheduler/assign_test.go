@@ -186,7 +186,8 @@ func TestProtocolAndChecksReachTheEdgeAndReplicas(t *testing.T) {
 	for _, v := range h.vms("ingress")[0].assignment.Files {
 		routes += v
 	}
-	if !strings.Contains(routes, `"name": "web"`) || strings.Count(routes, `"http2_protocol_options": {}`) != 2 {
+	// The third is the collector's.
+	if !strings.Contains(routes, `"name": "web"`) || strings.Count(routes, `"http2_protocol_options": {}`) != 3 {
 		t.Errorf("the edge should speak HTTP/2 to api and web:\n%s", routes)
 	}
 }
