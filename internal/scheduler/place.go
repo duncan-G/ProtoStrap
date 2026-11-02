@@ -109,7 +109,7 @@ func (s *Scheduler) place(now time.Time) {
 		case "ingress":
 		default:
 			rm := choose(pool(r.Pool), r)
-			if rm == nil && r.Pool == "compute" {
+			if rm == nil && r.Pool == "compute" && r.Kind == api.KindWorker {
 				rm = choose(pool("general"), r)
 			}
 			if rm == nil && r.Pool == "general" && r.Kind != api.KindWorker {

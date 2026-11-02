@@ -237,7 +237,7 @@ defaults, or to leave it out.
 | `sources`    | service, worker, task | More files, directories and git pathspecs the image is built from, such as shared code |
 | `image`      | stateful          | Upstream image, pinned to a tag                                               |
 | `command`    | all               | Replaces the image's command                                                  |
-| `pool`       | service, worker, task | `general` or `compute`                                                    |
+| `pool`       | service, worker, task | `general` or `compute`; only a worker runs in `compute`                   |
 | `vm`         | stateful          | The data VM it is pinned to                                                   |
 | `request`    | all               | CPU and memory one replica reserves                                           |
 | `port`       | service, stateful | Port it listens on                                                            |

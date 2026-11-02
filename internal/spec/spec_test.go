@@ -509,6 +509,7 @@ func TestCheck(t *testing.T) {
 		{"stateful with build", insertAfter("    image: postgres:17.2\n", "    build: pg\n"), "components.postgres.build", "upstream image"},
 		{"bad pool", replace("    pool: general\n    request: { cpu: 500m", "    pool: data\n    request: { cpu: 500m"), "components.api.pool", "general or compute"},
 		{"no pool", replace("    pool: general\n    request: { cpu: 500m", "    request: { cpu: 500m"), "components.api.pool", "required"},
+		{"service in compute", replace("    pool: general\n    request: { cpu: 500m", "    pool: compute\n    request: { cpu: 500m"), "components.api.pool", "only a worker runs in compute"},
 		{"compute pool missing", replace("  compute:\n    vm: [c7g.xlarge, c6g.xlarge, c8g.xlarge, c7gd.xlarge]\n    min: 0\n    max: 20\n    spare: 0\n    target: 85%\n    reserved: { cpu: 400m, memory: 1Gi }\n", ""), "components.orders-worker.pool", "no compute pool"},
 		{"stateful with pool", insertAfter("    vm: data-1\n    request: { cpu: 2500m", ""), "", ""}, // It changes nothing: see "stateful pool" below.
 		{"stateful pool", insertAfter("    image: postgres:17.2\n", "    pool: general\n"), "components.postgres.pool", "pinned to a data VM"},

@@ -3,7 +3,7 @@ using ProtoStrap.Hosting;
 
 namespace Aspire.Hosting;
 
-/// <summary>Pool is the scaling pool that a service, worker or task runs in.</summary>
+/// <summary>Pool is the scaling pool that a worker runs in. Services and tasks run in general.</summary>
 public enum Pool
 {
     /// <summary>General is the pool of general VMs, where services run.</summary>
@@ -186,9 +186,6 @@ public sealed class ProtoStrapUpstream
 public sealed class ProtoStrapService
 {
     internal ComponentSettings Settings { get; } = new(ComponentKind.Service);
-
-    /// <summary>Pool sets the pool the service runs in, which defaults to general.</summary>
-    public ProtoStrapService Pool(Pool pool) { Settings.Pool = pool; return this; }
 
     /// <summary>Request sets the CPU and memory one replica reserves, such as "500m" and "512Mi".</summary>
     public ProtoStrapService Request(string cpu, string memory) { Settings.Request = new(cpu, memory); return this; }
@@ -388,9 +385,6 @@ public sealed class ProtoStrapStateful
 public sealed class ProtoStrapTask
 {
     internal ComponentSettings Settings { get; } = new(ComponentKind.Task);
-
-    /// <summary>Pool sets the pool the task runs in, which defaults to general.</summary>
-    public ProtoStrapTask Pool(Pool pool) { Settings.Pool = pool; return this; }
 
     /// <summary>Request sets the CPU and memory the task reserves while it runs.</summary>
     public ProtoStrapTask Request(string cpu, string memory) { Settings.Request = new(cpu, memory); return this; }

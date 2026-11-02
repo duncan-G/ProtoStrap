@@ -145,7 +145,6 @@ public class ProtoFastScenarioTests
             .WithHttpHealthCheck("/healthz")
             .WithReference(documents)
             .PublishAsProtoStrapService(s => s
-                .Pool(Pool.Compute)
                 .Request(cpu: "1000m", memory: "2Gi")
                 .Scale(min: 1, max: 4, demand => demand.Cpu(0.70)));
 
