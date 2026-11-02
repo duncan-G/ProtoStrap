@@ -222,6 +222,16 @@ func TestTheListenerNormalisesPaths(t *testing.T) {
 	}
 }
 
+// A service gets :scheme http over cleartext, though the request came over https: Kestrel
+// resets an h2c stream that says https.
+func TestTheSchemeMatchesTheConnectionToTheService(t *testing.T) {
+	v := decode(t, Files(config(services()))["edge/lds.json"])
+	hcm := v["resources"].([]any)[0].(map[string]any)["filter_chains"].([]any)[0].(map[string]any)["filters"].([]any)[0].(map[string]any)["typed_config"].(map[string]any)
+	if got, _ := hcm["scheme_header_transformation"].(map[string]any); got["match_upstream"] != true {
+		t.Errorf("scheme_header_transformation = %v, want match_upstream", hcm["scheme_header_transformation"])
+	}
+}
+
 func TestPathOnlyRoutesMatchEveryHost(t *testing.T) {
 	v := decode(t, Files(config(services()))["edge/lds.json"])
 	hosts := virtualHosts(t, v)

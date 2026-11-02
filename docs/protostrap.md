@@ -347,7 +347,7 @@ gateway:
 | Field       | Meaning                                                                                  |
 | ----------- | ---------------------------------------------------------------------------------------- |
 | `routes`    | Required. A [host](#hosts)'s name and a path prefix the gateway sends to it, such as `shop/api/`, each with an optional `rate`. A path alone, such as `/v2/`, matches every host |
-| `protocol`  | What the gateway speaks to it: `http1`, `http2` (cleartext HTTP/2), or `grpc`, which is HTTP/2 with browsers' gRPC-Web translated for it. It defaults to `grpc` with `ready: grpc`, otherwise `http1` |
+| `protocol`  | What the gateway speaks to it: `http1`, `http2` (cleartext HTTP/2), or `grpc`, which is HTTP/2 with browsers' gRPC-Web translated for it. It defaults to `grpc` with `ready: grpc`, otherwise `http1`. A request's `:scheme` is the connection's, `http`; `X-Forwarded-Proto` keeps the client's `https` |
 | `authorize` | Another service the gateway asks about each request to these routes first ([Authorizing requests](#authorizing-requests)) |
 
 - **An upstream is a service,** a component of kind `service`, with at least one route. A
