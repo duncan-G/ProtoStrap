@@ -131,7 +131,7 @@ func TestRunWritesEveryConfigAndDirectory(t *testing.T) {
 	go func() { done <- Run(ctx, c) }()
 	waitFor(t, "five programs", func() bool { return strings.Count(read(log), " started") == 5 })
 	for _, name := range []string{"collector.json", "loki.json", "tempo.json", "prometheus.json", "grafana.ini",
-		"grafana/provisioning/datasources/protostrap.json"} {
+		"grafana/provisioning/datasources/protostrap.yaml"} {
 		if _, err := os.Stat(filepath.Join(c.ConfigDir, name)); err != nil {
 			t.Errorf("%s: %v", name, err)
 		}

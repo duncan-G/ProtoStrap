@@ -262,7 +262,8 @@ func prepare(c Config, targets []Target) error {
 		"tempo.json":      TempoConfig(c),
 		"prometheus.json": PrometheusConfig(c, targets),
 		"grafana.ini":     GrafanaINI(c),
-		"grafana/provisioning/datasources/protostrap.json": GrafanaDatasources(),
+		// Grafana provisions only .yaml and .yml files; the JSON is valid YAML.
+		"grafana/provisioning/datasources/protostrap.yaml": GrafanaDatasources(),
 	}
 	for _, name := range slices.Sorted(maps.Keys(files)) {
 		if err := writeFile(c, name, files[name]); err != nil {
