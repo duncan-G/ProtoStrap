@@ -342,8 +342,11 @@ func listener(services []Service, cfg Routing) obj {
 		"normalize_path":                   true,
 		"merge_slashes":                    true,
 		"path_with_escaped_slashes_action": "UNESCAPE_AND_REDIRECT",
-		"common_http_protocol_options":     obj{"idle_timeout": "300s"},
-		"route_config":                     obj{"name": "routes", "virtual_hosts": vhosts},
+		// Envoy takes :scheme from cloudflared's x-forwarded-proto, https, and Kestrel resets
+		// an h2c stream whose :scheme isn't http. x-forwarded-proto still says https.
+		"scheme_header_transformation": obj{"match_upstream": true},
+		"common_http_protocol_options": obj{"idle_timeout": "300s"},
+		"route_config":                 obj{"name": "routes", "virtual_hosts": vhosts},
 		"http_filters": slices.Concat(
 			// A route's rate limit comes first, so it protects the authorizer too.
 			[]any{obj{"name": "envoy.filters.http.local_ratelimit", "typed_config": obj{
