@@ -120,8 +120,11 @@ func LokiConfig(c Config) string {
 		"common": obj{
 			"path_prefix":        dir,
 			"replication_factor": 1,
-			"ring":               obj{"instance_addr": host, "kvstore": obj{"store": "inmemory"}},
-			"storage":            obj{"s3": obj{"bucketnames": c.Bucket, "region": c.Region}},
+			// Also the query frontend's address, which queriers send results to; it would
+			// otherwise be the container's interface, where gRPC doesn't listen.
+			"instance_addr": host,
+			"ring":          obj{"kvstore": obj{"store": "inmemory"}},
+			"storage":       obj{"s3": obj{"bucketnames": c.Bucket, "region": c.Region}},
 		},
 		"schema_config": obj{"configs": []obj{{
 			"from": "2026-01-01", "store": "tsdb", "object_store": "s3", "schema": "v13",

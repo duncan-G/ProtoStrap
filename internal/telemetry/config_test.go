@@ -203,6 +203,9 @@ func TestLokiKeepsLogsInTheBucketForTheirRetention(t *testing.T) {
 	if got := at(t, v, "compactor", "delete_request_store"); got != "s3" {
 		t.Errorf("delete_request_store %v", got)
 	}
+	if got := at(t, v, "common", "instance_addr"); got != at(t, v, "server", "grpc_listen_address") {
+		t.Errorf("instance_addr %v: queriers send results to it, so it must be where gRPC listens", got)
+	}
 	if got := at(t, v, "common", "path_prefix"); got != "/var/lib/telemetry/loki" {
 		t.Errorf("path prefix %v: on the volume", got)
 	}
