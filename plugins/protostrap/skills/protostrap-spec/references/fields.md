@@ -18,7 +18,7 @@ The spec's fields as `internal/spec` reads them. A key not listed here is an err
 
 ```yaml
 app: shop                      # up to 30 characters; names the secret, shop/<environment>, and the log groups
-protostrap: 0.1.4              # the ProtoStrap version; must match the workflows' @v and the roots' ?ref=
+protostrap: 0.1.5              # the ProtoStrap version; must match the workflows' @v and the roots' ?ref=
 pools: { ... }
 cdn:                           # optional; the application's own rules at Cloudflare (below). Needs the tunnel
   rate_limit: { requests: 300, period: 1m }   # per client; period 10s (default), 1m, 2m, 5m, 10m or 1h
