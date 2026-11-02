@@ -1,6 +1,8 @@
 using System.Text.Json;
 using Aspire.Hosting;
 using Aspire.Hosting.ApplicationModel;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
 using ProtoStrap.Hosting.Tests.Support;
 
 namespace ProtoStrap.Hosting.Tests;
@@ -206,6 +208,28 @@ public class LocalEdgeTests
 
         var authorize = JsonDocument.Parse(routing).RootElement.GetProperty("services")[0].GetProperty("authorize");
         Assert.Equal("""{"by":"auth","headers":["x-user"],"open":true,"timeout":"500ms","skip":["/assets/","*.js"]}""", JsonSerializer.Serialize(authorize));
+    }
+
+    [Fact]
+    public async Task TheLocalEdgeSendsItsRequestsToTheDashboard()
+    {
+        // Each request's log record and span go where Aspire points the gateway's OTLP exporter,
+        // with its headers and the gateway's name, which with OTEL_RESOURCE_ATTRIBUTES from Aspire
+        // puts them on the gateway's resource.
+        using var repo = new FixtureRepo();
+        var builder = TestApp.Run(repo);
+        builder.Configuration["ASPIRE_DASHBOARD_OTLP_ENDPOINT_URL"] = "https://dashboard.test:21251";
+        builder.Configuration["AppHost:OtlpApiKey"] = "key";
+        var gateway = builder.AddEnvironment().AddEnvoyGateway("gateway").WithHost("app", "protofast.dev", local: "app.dev.localhost");
+        await using var app = builder.Build();
+        var executionContext = app.Services.GetRequiredService<DistributedApplicationExecutionContext>();
+
+        var telemetry = await LocalEdge.DashboardAsync(gateway.Resource, executionContext, NullLogger.Instance, CancellationToken.None);
+        var routing = await LocalEdge.RoutingAsync(gateway.Resource, 10000,
+            (_, _) => Task.FromResult("host.docker.internal:51234"), CancellationToken.None, telemetry);
+
+        var got = JsonDocument.Parse(routing).RootElement.GetProperty("telemetry");
+        Assert.Equal("""{"address":"dashboard.test:21251","tls":true,"headers":{"x-otlp-api-key":"key"},"service":"gateway"}""", JsonSerializer.Serialize(got));
     }
 
     [Fact]

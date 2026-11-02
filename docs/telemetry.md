@@ -90,6 +90,7 @@ every one is ready. If one exits, the others stop and Docker restarts the contai
 | ----------------------------------------------------------- | --------------------------------------------------------------------------------------- | ---------- |
 | Every replica's stdout and stderr, the edge's included      | Docker's `fluentd` log driver, on the replica's VM, sends each line to the collector at data-1's fixed address, port 24224 | Loki       |
 | Logs a service sends with OpenTelemetry                     | OTLP to `telemetry:4318` on the overlay                                                 | Loki       |
+| The edge's requests: a log record and a span for each        | OTLP over gRPC to `telemetry:4317` ([The edge's requests](#the-edges-requests))        | Loki and Tempo |
 | Traces                                                      | OTLP                                                                                    | Tempo      |
 | Metrics a service sends with OpenTelemetry                  | OTLP                                                                                    | Prometheus |
 | Each component's `metrics` endpoint, and the edge's request counts | Prometheus scrapes every replica, found by name on the overlay, every 30 seconds | Prometheus |
@@ -143,13 +144,35 @@ SDKs read:
   the protocol go together, though: setting either drops both of ProtoStrap's, since one is
   no use without the other. An application that runs its own collector points its services
   at it this way. That collector then exports to `http://telemetry:4318`, OTLP over HTTP.
-- **ProtoStrap's own replicas,** the edge and telemetry, get none of these variables.
+- **ProtoStrap's own replicas,** the edge and telemetry, get none of these variables, but
+  the edge gets `OTEL_RESOURCE_ATTRIBUTES`, which Envoy reads (see below).
 - **A metrics endpoint needs nothing more.** A component with `metrics` is scraped as it is
   for scaling: every replica, every 30 seconds. Metrics sent over OTLP and scraped metrics
   land in the same Prometheus.
 - **Label metrics by route, never by user, ID or raw path.** Prometheus keeps every
   distinct set of labels as a series in memory, so a label with unbounded values exhausts
   it.
+
+### The edge's requests
+
+The edge sends a log record and a span for each request to `telemetry:4317`, OTLP over gRPC,
+as `service_name="edge"`. Nothing needs setting.
+
+- **The log record's body is the request line:** the method, host and path without the
+  query, which may hold a sign-in's code; the service it went to; the status; Envoy's
+  response flags, such as `UAEX` for a request the authorizer refused, `NR` for one no route
+  matched, or `UH` for one no ready replica could take; and the time it took. Its attributes
+  hold the same parts apart (`url.path`, `http.response.status_code`, `envoy.response_flags`,
+  `envoy.upstream_cluster` and so on), and the user agent.
+- **The span starts the request's trace,** or continues the browser's from its
+  `traceparent`, and Envoy passes it to the service and to the authorizer, so a request
+  opens in Tempo from the edge down. Its `http.url` has no query either. The log record
+  carries the span's trace, so a line opens its trace.
+- **Each edge names its own replica:** the edges share their files, so Envoy reads its
+  `service.instance.id` and `service.version` from `OTEL_RESOURCE_ATTRIBUTES`, which the
+  scheduler sets in the edge alone.
+- **The edge writes no request line to stdout,** which would reach Loki a second time. Envoy's
+  own warnings still do.
 
 ### From browsers
 
@@ -194,6 +217,7 @@ Then open `http://localhost:7482`.
 | A component's errors         | Loki        | `{service_name="api"} \|~ "(?i)error\|exception\|fatal"`    |
 | One replica's output         | Loki        | `{service_instance_id="api-k3f9"}`                          |
 | Slow requests                | Tempo       | `{ resource.service.name = "api" && duration > 500ms }`     |
+| Requests the edge refused or couldn't route | Loki | `{service_name="edge"} \| envoy_response_flags=~"UAEX\|NR\|UH"` |
 | Requests per second, by service | Prometheus | `sum by (envoy_cluster_name) (rate(envoy_cluster_upstream_rq_total[5m]))` |
 
 ### For agents
@@ -292,6 +316,8 @@ volume, no `protostrap-telemetry` session document, and no port 24224 between VM
   `log_retention_days`.
 - **Replicas get no `OTEL_` variables,** so an SDK that reads them sends nothing, unless the
   spec's `env` points it at a collector of the application's own.
+- **The edge writes each request's line to stdout,** and so to its log group, and sends no
+  spans.
 - **Nothing keeps metrics or traces.** Agents still scrape each `metrics` endpoint for
   `metric` signals and limits, as they do with telemetry.
 - **There is no Grafana** to open, and no `scripts/telemetry.sh` session.
@@ -327,8 +353,9 @@ volume, no `protostrap-telemetry` session document, and no port 24224 between VM
 Under `aspire run`, Aspire's dashboard plays this part, whether or not the AppHost adds
 telemetry: `AddTelemetry` runs only in an account. Aspire sets the same `OTEL_` variables,
 pointing at its own collector, so a service sends the same telemetry locally as in an
-environment, and nothing in the spec changes. The dashboard keeps everything in memory, for
-one run.
+environment, and nothing in the spec changes. The local gateway sends its requests' log
+records and spans to the dashboard too, as the gateway's resource. The dashboard keeps
+everything in memory, for one run.
 
 
 ## Upgrading

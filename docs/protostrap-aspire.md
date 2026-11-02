@@ -914,9 +914,12 @@ reach the local gateway directly, and the dashboard has the services' telemetry.
   draws it in front of them. Its console has a line for each request: the method, host and
   path (without the query, which may hold a sign-in's code), the service it went to, the
   status, and Envoy's response flags, such as `UAEX` for a request the authorizer refused,
-  `NR` for one no route matched, or `UH` for one no ready replica could take. An account's
-  edge doesn't log requests. A service's own URL reaches it directly, past the gateway's
-  routing and authorization.
+  `NR` for one no route matched, or `UH` for one no ready replica could take. It also sends
+  each request's log record and span to the dashboard's OTLP/gRPC endpoint, where Aspire
+  points the gateway's exporter, so they show under the gateway's structured logs and traces;
+  an account's edge sends them to telemetry
+  ([The edge's requests](telemetry.md#the-edges-requests)). A service's own URL reaches it
+  directly, past the gateway's routing and authorization.
 - **It is rendered by `protostrap edge render`,** as the container is created, once every
   service it reaches has its address on Aspire's container network: the gateway depends on
   each upstream and each authorizer of one, so Aspire's container tunnel gives each project

@@ -128,9 +128,15 @@ func (s *Scheduler) otelEnv(env map[string]string, c *spec.Component, id, releas
 		env["OTEL_EXPORTER_OTLP_PROTOCOL"] = "http/protobuf"
 	}
 	set("OTEL_SERVICE_NAME", c.Name)
+	set("OTEL_RESOURCE_ATTRIBUTES", s.resourceAttributes(id, release))
+}
+
+// resourceAttributes are a replica's OTEL_RESOURCE_ATTRIBUTES: its replica, its release and
+// the environment.
+func (s *Scheduler) resourceAttributes(id, release string) string {
 	attrs := []string{"service.instance.id=" + id, "service.version=" + release}
 	if s.cfg.Environment != "" {
 		attrs = append(attrs, "deployment.environment.name="+s.cfg.Environment)
 	}
-	set("OTEL_RESOURCE_ATTRIBUTES", strings.Join(attrs, ","))
+	return strings.Join(attrs, ",")
 }

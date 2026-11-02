@@ -822,7 +822,9 @@ A rule matches with these fields, each optional but `name`:
   - translates browsers' gRPC-Web on routes to `grpc` upstreams only, so any other service,
     such as an application's own gateway, gets it as it was sent;
   - applies each route's `rate`;
-  - counts requests per upstream, which its agent scrapes for `requests` signals.
+  - counts requests per upstream, which its agent scrapes for `requests` signals;
+  - with [telemetry](telemetry.md#the-edges-requests), sends a log record and a span for each
+    request to the collector; without it, writes each request's line to stdout.
 - **Routes** are a file the agent writes from the assignment. Envoy reloads it without
   restarting, so a route change never restarts the edge.
 - **Upgrading it** follows the replica rule: the new edge starts beside the old one on the

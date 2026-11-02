@@ -148,6 +148,23 @@ type Routing struct {
 	// Local is the edge `aspire run` runs, where gRPC checks don't name the service: no
 	// address is reused there, and no replica has PROTOSTRAP_COMPONENT to answer for.
 	Local bool `json:"local,omitempty"`
+	// Telemetry is the collector the edge sends each request's log record and span to, or
+	// nil for none.
+	Telemetry *Telemetry `json:"telemetry,omitempty"`
+}
+
+// Telemetry is an OpenTelemetry collector's OTLP/gRPC receiver: ProtoStrap's in an account,
+// the dashboard's under `aspire run` (docs/telemetry.md, "The edge's requests").
+type Telemetry struct {
+	// Address is the receiver, host:port.
+	Address string `json:"address"`
+	// TLS says the receiver takes only TLS. The edge doesn't verify its certificate, which
+	// under `aspire run` is the dashboard's development one.
+	TLS bool `json:"tls,omitempty"`
+	// Headers are sent with each export, such as the dashboard's x-otlp-api-key.
+	Headers map[string]string `json:"headers,omitempty"`
+	// Service is the edge's service.name. Empty is edge.
+	Service string `json:"service,omitempty"`
 }
 
 // listen is where the listener listens.
@@ -190,7 +207,7 @@ func Files(cfg Routing) map[string]string {
 	slices.SortFunc(services, func(a, b Service) int { return strings.Compare(a.Name, b.Name) })
 	return map[string]string{
 		"edge/" + ListenerFile: render(listener(services, cfg)),
-		"edge/" + ClustersFile: render(clusters(services, cfg.Local)),
+		"edge/" + ClustersFile: render(clusters(services, cfg)),
 	}
 }
 
@@ -340,8 +357,22 @@ func listener(services []Service, cfg Routing) obj {
 			},
 		),
 	}
-	if cfg.Local {
-		hcm["access_log"] = []any{localAccessLog}
+	// The line on stdout is the local console's, and an account's without telemetry, whose
+	// stdout goes to CloudWatch. With telemetry it would reach Loki twice.
+	var logs []any
+	if cfg.Local || cfg.Telemetry == nil {
+		logs = append(logs, stdoutAccessLog)
+	}
+	if t := cfg.Telemetry; t != nil {
+		logs = append(logs, t.accessLog())
+		hcm["tracing"] = obj{
+			"provider": t.tracer(),
+			// Envoy's own http.url keeps the query, which may hold a sign-in's code.
+			"custom_tags": []any{obj{"tag": "http.url", "value": "%REQ(X-FORWARDED-PROTO?:SCHEME)%://%REQ(:AUTHORITY)%%PATH(NQ:ORIG_OR_PATH)%"}},
+		}
+	}
+	if logs != nil {
+		hcm["access_log"] = logs
 	}
 	return obj{"resources": []any{obj{
 		"@type":   "type.googleapis.com/envoy.config.listener.v3.Listener",
@@ -354,15 +385,130 @@ func listener(services []Service, cfg Routing) obj {
 	}}}
 }
 
-// localAccessLog is a line on the local edge's console, the AppHost's dashboard, for each
-// request: the host and path it came for, without the query, which may hold a sign-in's code;
-// the service it went to; and the status with Envoy's response flags, such as UAEX for one the
-// authorizer refused, NR for one no route matched, or UH for one no ready replica could take.
-var localAccessLog = obj{"name": "envoy.access_loggers.stdout", "typed_config": obj{
-	"@type": "type.googleapis.com/envoy.extensions.access_loggers.stream.v3.StdoutAccessLog",
-	"log_format": obj{"text_format_source": obj{"inline_string": "%REQ(:METHOD)% %REQ(:AUTHORITY)%%PATH(NQ:ORIG_OR_PATH)% %PROTOCOL% -> " +
-		"%UPSTREAM_CLUSTER% %RESPONSE_CODE% %RESPONSE_FLAGS% %DURATION%ms\n"}},
+// requestLine is the edge's line for each request: the host and path it came for, without
+// the query, which may hold a sign-in's code; the service it went to; and the status with
+// Envoy's response flags, such as UAEX for one the authorizer refused, NR for one no route
+// matched, or UH for one no ready replica could take.
+const requestLine = "%REQ(:METHOD)% %REQ(:AUTHORITY)%%PATH(NQ:ORIG_OR_PATH)% %PROTOCOL% -> " +
+	"%UPSTREAM_CLUSTER% %RESPONSE_CODE% %RESPONSE_FLAGS% %DURATION%ms"
+
+var stdoutAccessLog = obj{"name": "envoy.access_loggers.stdout", "typed_config": obj{
+	"@type":      "type.googleapis.com/envoy.extensions.access_loggers.stream.v3.StdoutAccessLog",
+	"log_format": obj{"text_format_source": obj{"inline_string": requestLine + "\n"}},
 }}
+
+// telemetryCluster is the collector's cluster. A service's name can't hold an underscore.
+const telemetryCluster = "protostrap_telemetry"
+
+// environmentDetector reads the replica's resource attributes from OTEL_RESOURCE_ATTRIBUTES,
+// so the files every edge shares name no replica.
+var environmentDetector = obj{"name": "envoy.tracers.opentelemetry.resource_detectors.environment", "typed_config": obj{
+	"@type": "type.googleapis.com/envoy.extensions.tracers.opentelemetry.resource_detectors.v3.EnvironmentResourceDetectorConfig",
+}}
+
+func (t *Telemetry) service() string {
+	if t.Service == "" {
+		return "edge"
+	}
+	return t.Service
+}
+
+func (t *Telemetry) host() (string, int) {
+	host, port, err := net.SplitHostPort(t.Address)
+	n, perr := strconv.Atoi(port)
+	if err != nil || perr != nil {
+		return t.Address, 4317
+	}
+	return host, n
+}
+
+func (t *Telemetry) grpcService() obj {
+	host, _ := t.host()
+	g := obj{"envoy_grpc": obj{"cluster_name": telemetryCluster, "authority": host}, "timeout": "1s"}
+	var metadata []any
+	if t.TLS {
+		// Envoy's gRPC client sets no :scheme, so the router takes it from here, or sends http,
+		// which Kestrel refuses over TLS.
+		metadata = append(metadata, obj{"key": "x-forwarded-proto", "value": "https"})
+	}
+	for _, k := range sortedKeys(t.Headers) {
+		metadata = append(metadata, obj{"key": k, "value": t.Headers[k]})
+	}
+	if metadata != nil {
+		g["initial_metadata"] = metadata
+	}
+	return g
+}
+
+// accessLog is a log record for each request, with the request line as its body and its
+// parts as attributes. Envoy gives it the request's trace and span.
+func (t *Telemetry) accessLog() obj {
+	attr := func(k, v string) obj { return obj{"key": k, "value": obj{"string_value": v}} }
+	return obj{"name": "envoy.access_loggers.open_telemetry", "typed_config": obj{
+		"@type":               "type.googleapis.com/envoy.extensions.access_loggers.open_telemetry.v3.OpenTelemetryAccessLogConfig",
+		"grpc_service":        t.grpcService(),
+		"log_name":            t.service(),
+		"resource_detectors":  []any{environmentDetector},
+		"resource_attributes": obj{"values": []any{attr("service.name", t.service())}},
+		"body":                obj{"string_value": requestLine},
+		"attributes": obj{"values": []any{
+			attr("http.request.method", "%REQ(:METHOD)%"),
+			attr("server.address", "%REQ(:AUTHORITY)%"),
+			attr("url.path", "%PATH(NQ:ORIG_OR_PATH)%"),
+			attr("network.protocol.name", "%PROTOCOL%"),
+			attr("user_agent.original", "%REQ(USER-AGENT)%"),
+			attr("http.response.status_code", "%RESPONSE_CODE%"),
+			attr("envoy.response_flags", "%RESPONSE_FLAGS%"),
+			attr("envoy.response_code_details", "%RESPONSE_CODE_DETAILS%"),
+			attr("envoy.upstream_cluster", "%UPSTREAM_CLUSTER%"),
+			attr("envoy.upstream_transport_failure_reason", "%UPSTREAM_TRANSPORT_FAILURE_REASON%"),
+			attr("envoy.duration_ms", "%DURATION%"),
+		}},
+	}}
+}
+
+// tracer has Envoy start or continue each request's trace, and pass it on to the service and
+// the authorizer in traceparent.
+func (t *Telemetry) tracer() obj {
+	return obj{"name": "envoy.tracers.opentelemetry", "typed_config": obj{
+		"@type":              "type.googleapis.com/envoy.config.trace.v3.OpenTelemetryConfig",
+		"grpc_service":       t.grpcService(),
+		"service_name":       t.service(),
+		"resource_detectors": []any{environmentDetector},
+	}}
+}
+
+// cluster reaches the collector by its name, over HTTP/2.
+func (t *Telemetry) cluster() obj {
+	host, port := t.host()
+	c := obj{
+		"@type": "type.googleapis.com/envoy.config.cluster.v3.Cluster",
+		"name":  telemetryCluster,
+		"cluster_type": obj{"name": "envoy.cluster.dns", "typed_config": obj{
+			"@type":             "type.googleapis.com/envoy.extensions.clusters.dns.v3.DnsCluster",
+			"dns_lookup_family": "V4_ONLY",
+			"dns_refresh_rate":  "5s",
+			"respect_dns_ttl":   false,
+		}},
+		"connect_timeout": "2s",
+		"load_assignment": obj{"cluster_name": telemetryCluster, "endpoints": []any{obj{"lb_endpoints": []any{obj{
+			"endpoint": obj{"address": obj{"socket_address": obj{"address": host, "port_value": port}}},
+		}}}}},
+		"typed_extension_protocol_options": obj{"envoy.extensions.upstreams.http.v3.HttpProtocolOptions": obj{
+			"@type":                "type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions",
+			"explicit_http_config": obj{"http2_protocol_options": obj{}},
+		}},
+	}
+	if t.TLS {
+		// Kestrel speaks HTTP/2 over TLS only when ALPN asks for it.
+		c["transport_socket"] = obj{"name": "envoy.transport_sockets.tls", "typed_config": obj{
+			"@type":              "type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext",
+			"sni":                host,
+			"common_tls_context": obj{"alpn_protocols": []any{"h2"}},
+		}}
+	}
+	return c
+}
 
 func virtualHost(host string, routes []routeEntry) obj {
 	var rs []any
@@ -493,8 +639,9 @@ func withSkips(routes []routeEntry) []routeEntry {
 // clusters is one cluster per routed service. Each cluster finds the service's replicas by
 // looking its name up on the overlay every 5 seconds, balances each request across them,
 // and sends only to those passing their readiness check, which asks for the service by its
-// own name.
-func clusters(services []Service, local bool) obj {
+// own name. With telemetry, the collector has one too.
+func clusters(services []Service, cfg Routing) obj {
+	local := cfg.Local
 	authorizers := map[string]bool{}
 	for _, s := range services {
 		if s.Authorize != nil && len(s.Routes) > 0 {
@@ -572,6 +719,9 @@ func clusters(services []Service, local bool) obj {
 			"common_lb_config":              obj{"healthy_panic_threshold": obj{"value": 0}},
 			"ignore_health_on_host_removal": true,
 		})
+	}
+	if cfg.Telemetry != nil {
+		resources = append(resources, cfg.Telemetry.cluster())
 	}
 	return obj{"resources": resources}
 }

@@ -6,6 +6,8 @@ using System.Text.RegularExpressions;
 using Aspire.Hosting;
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.Eventing;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using ProtoStrap.Hosting.Spec;
 
@@ -46,6 +48,9 @@ internal static class LocalEdge
             // Docker on Linux doesn't define by itself.
             .WithContainerRuntimeArgs("--add-host=host.docker.internal:host-gateway")
             .WithUrls(context => LinkHosts(context, resource))
+            // Envoy reads only OTEL_RESOURCE_ATTRIBUTES, the instance the dashboard knows it by.
+            // The rest is rendered into its config (DashboardAsync).
+            .WithOtlpExporter(OtlpProtocol.Grpc)
             .ExcludeFromManifest();
         resource.LocalBuild = LocalBuild.Add(builder, resource.Environment, gateway);
         builder.Eventing.Subscribe<BeforeStartEvent>((e, _) =>
@@ -129,7 +134,10 @@ internal static class LocalEdge
                     : NullLogger.Instance;
                 var renderer = await gateway.LocalBuild!.EnsureAsync(logger, cancellationToken);
                 Directory.CreateDirectory(dir);
-                var routing = await RoutingAsync(gateway, ListenPort, resolve, cancellationToken);
+                var telemetry = AppServices?.GetService<DistributedApplicationExecutionContext>() is { } executionContext
+                    ? await DashboardAsync(gateway, executionContext, logger, cancellationToken)
+                    : null;
+                var routing = await RoutingAsync(gateway, ListenPort, resolve, cancellationToken, telemetry);
                 var routingPath = Path.Combine(dir, "routing.json");
                 await File.WriteAllTextAsync(routingPath, routing, cancellationToken);
                 await LocalEdge.RenderAsync(renderer, routingPath, dir, cancellationToken);
@@ -140,6 +148,42 @@ internal static class LocalEdge
                 _rendering.Release();
             }
         }
+    }
+
+    /// <summary>
+    /// DashboardAsync is where the gateway sends each request's log record and span: the OTLP
+    /// endpoint and headers Aspire gives the gateway's container, which Envoy reads only from its
+    /// config. It is null when the dashboard takes no gRPC, or there is none.
+    /// </summary>
+    internal static async Task<RoutedTelemetry?> DashboardAsync(
+        ProtoStrapGatewayResource gateway, DistributedApplicationExecutionContext executionContext, ILogger logger, CancellationToken cancellationToken)
+    {
+        var env = new Dictionary<string, object>();
+        var callbackContext = new EnvironmentCallbackContext(executionContext, gateway, env, cancellationToken) { Logger = logger };
+        foreach (var callback in gateway.Annotations.OfType<EnvironmentCallbackAnnotation>())
+            await callback.Callback(callbackContext);
+        if (!env.TryGetValue("OTEL_EXPORTER_OTLP_ENDPOINT", out var endpoint) || env.GetValueOrDefault("OTEL_EXPORTER_OTLP_PROTOCOL") as string != "grpc")
+            return null;
+        var context = new ValueProviderContext { ExecutionContext = executionContext, Caller = gateway, Network = KnownNetworkIdentifiers.DefaultAspireContainerNetwork };
+        var url = endpoint switch
+        {
+            IValueProvider provider => await provider.GetValueAsync(context, cancellationToken),
+            string text => text,
+            _ => null,
+        };
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri))
+            return null;
+        // OTEL_EXPORTER_OTLP_HEADERS is key=value pairs, comma-separated.
+        var headers = (env.GetValueOrDefault("OTEL_EXPORTER_OTLP_HEADERS") as string ?? "")
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(h => h.Split('=', 2))
+            .Where(kv => kv.Length == 2)
+            .ToDictionary(kv => kv[0], kv => kv[1], StringComparer.Ordinal);
+        return new RoutedTelemetry(
+            uri.Host + ":" + uri.Port.ToString(CultureInfo.InvariantCulture),
+            uri.Scheme == Uri.UriSchemeHttps ? true : null,
+            headers.Count > 0 ? headers : null,
+            gateway.Name);
     }
 
     private static async Task RenderAsync(string renderer, string routing, string dir, CancellationToken cancellationToken)
@@ -177,7 +221,8 @@ internal static class LocalEdge
     /// </summary>
     public static async Task<string> RoutingAsync(
         ProtoStrapGatewayResource gateway, int listenPort,
-        Func<IResource, EndpointAnnotation, Task<string>> resolve, CancellationToken cancellationToken)
+        Func<IResource, EndpointAnnotation, Task<string>> resolve, CancellationToken cancellationToken,
+        RoutedTelemetry? telemetry = null)
     {
         var routed = new List<RoutedService>();
         foreach (var (resource, settings, upstream) in ReachedServices(gateway))
@@ -219,7 +264,8 @@ internal static class LocalEdge
             routed,
             gateway.HostSettings.Count == 0 ? null : gateway.HostSettings.GroupBy(h => h.Name).ToDictionary(g => g.Key, g => g.Last().Local, StringComparer.Ordinal),
             "0.0.0.0:" + listenPort.ToString(CultureInfo.InvariantCulture),
-            Local: true);
+            Local: true,
+            telemetry);
         return JsonSerializer.Serialize(routing, JsonOptions);
     }
 
@@ -305,15 +351,18 @@ internal static class LocalEdge
         Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
     };
 
-    // These records are internal/edge's Routing, Service, Route and Authorize, as JSON.
+    // These records are internal/edge's Routing, Service, Route, Authorize and Telemetry, as JSON.
 
-    private sealed record Routing(IReadOnlyList<RoutedService> Services, IReadOnlyDictionary<string, string>? Hosts, string Listen, bool Local);
+    private sealed record Routing(
+        IReadOnlyList<RoutedService> Services, IReadOnlyDictionary<string, string>? Hosts, string Listen, bool Local, RoutedTelemetry? Telemetry);
 
     private sealed record RoutedService(
         string Name, int Port, string Ready, string Protocol, IReadOnlyList<RoutedRoute>? Routes, RoutedAuthorize? Authorize,
         string Address, int? HealthPort);
 
     private sealed record RoutedRoute(string? Host, string Path, double? Rate);
+
+    internal sealed record RoutedTelemetry(string Address, bool? Tls, IReadOnlyDictionary<string, string>? Headers, string Service);
 
     private sealed record RoutedAuthorize(
         string By, string? Path, IReadOnlyList<string>? Headers, IReadOnlyList<string>? Forward, IReadOnlyList<string>? Respond,

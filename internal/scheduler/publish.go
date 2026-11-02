@@ -3,6 +3,7 @@ package scheduler
 import (
 	"maps"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/duncan-G/protostrap/internal/api"
@@ -32,7 +33,7 @@ func (s *Scheduler) assignment(vm *VM) api.Assignment {
 		a.Replicas = append(a.Replicas, r.Spec)
 	}
 	if vm.Pool == "ingress" && hasEdge(s.st.target) {
-		a.Files = edge.Files(edge.Routing{Services: s.edgeServices(s.st.target), Hosts: s.hosts(s.st.target)})
+		a.Files = edge.Files(s.edgeRouting(s.st.target))
 	}
 	if vm.Pool == "data" && vm.Name == telemetryVM && hasTelemetry(s.st.target) {
 		a.Files = map[string]string{telemetry.ScrapeFile: telemetry.TargetsFile(s.scrapeTargets(s.st.target))}
@@ -53,6 +54,16 @@ func (s *Scheduler) assignment(vm *VM) api.Assignment {
 		}
 	}
 	return a
+}
+
+// edgeRouting is what every edge's Envoy is rendered from. With telemetry, the edge sends
+// each request's log record and span to the collector, over gRPC.
+func (s *Scheduler) edgeRouting(tgt *target) edge.Routing {
+	r := edge.Routing{Services: s.edgeServices(tgt), Hosts: s.hosts(tgt)}
+	if hasTelemetry(tgt) {
+		r.Telemetry = &edge.Telemetry{Address: telemetry.Name + ":" + strconv.Itoa(telemetry.OTLPGRPCPort)}
+	}
+	return r
 }
 
 // edgeServices are the services the edge sends requests to, and those it asks whether to.
@@ -223,10 +234,18 @@ func (s *Scheduler) edgeSpec(tgt *target, id string) api.ReplicaSpec {
 	if len(names) > 0 {
 		rs.Metrics = &api.MetricsSpec{Endpoint: "9902/metrics", Names: names}
 	}
+	rs.Env = map[string]string{}
 	if tgt.spec.Tunnel != nil {
 		s.secretSpec(&rs, "edge", secret.Edge)
 	} else {
-		rs.Env = map[string]string{edge.EnvTunnel: "off"}
+		rs.Env[edge.EnvTunnel] = "off"
+	}
+	if hasTelemetry(tgt) {
+		// Envoy's resource detector reads the replica's own attributes from here.
+		rs.Env["OTEL_RESOURCE_ATTRIBUTES"] = s.resourceAttributes(id, tgt.rel.Commit)
+	}
+	if len(rs.Env) == 0 {
+		rs.Env = nil
 	}
 	return rs
 }
