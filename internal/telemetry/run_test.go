@@ -150,6 +150,15 @@ func TestRunWritesEveryConfigAndDirectory(t *testing.T) {
 	if info, err := os.Stat(c.SocketDir); err != nil || !info.IsDir() {
 		t.Errorf("the socket directory: %v", err)
 	}
+	// The programs run as a user of their own, so it must reach their configs.
+	for _, dir := range []string{c.ConfigDir, filepath.Join(c.ConfigDir, "grafana")} {
+		info, err := os.Stat(dir)
+		if err != nil {
+			t.Errorf("%s: %v", dir, err)
+		} else if info.Mode().Perm()&0o005 != 0o005 {
+			t.Errorf("%s is %v: the programs' user can't reach their configs", dir, info.Mode().Perm())
+		}
+	}
 	cancel()
 	<-done
 }

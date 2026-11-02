@@ -226,6 +226,11 @@ func readTargetsChanged(c Config, current []Target, currentText string, log *slo
 // prepare writes every program's config and makes their directories, owned by the user
 // they run as.
 func prepare(c Config, targets []Target) error {
+	// Before Grafana's data directory, whose MkdirAll would make these 0750 and root's: the
+	// programs read their configs here as their own user.
+	if err := os.MkdirAll(filepath.Join(c.ConfigDir, "grafana"), 0o755); err != nil {
+		return err
+	}
 	dirs := []string{grafanaData(c)}
 	for _, dir := range []string{"loki", "tempo", "prometheus"} {
 		dirs = append(dirs, filepath.Join(c.DataDir, dir))
