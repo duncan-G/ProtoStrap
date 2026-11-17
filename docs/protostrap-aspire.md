@@ -702,7 +702,7 @@ tag          = "c-" + the first 16 hex digits of sha256(sources hash, recipe)
   `global.json`, package lock files, and every item (`Compile`, `Content`, `Protobuf`,
   `EmbeddedResource` and so on) whose path is outside its project's directory, such as a
   `.proto` linked from a shared folder.
-- **Pin floating inputs.** A base image such as `aspnet:10.0` moves when it is patched.
+- **Pin floating inputs.** A base image such as `aspnet:11.0` moves when it is patched.
   Unpinned, it makes a tag depend on when you deploy rather than what you committed.
   `protostrap plan` still resolves the base image's digest and puts it in the recipe, so a
   patch rebuilds, but nothing in the repository says why. Pinned by digest in

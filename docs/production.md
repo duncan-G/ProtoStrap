@@ -221,7 +221,7 @@ hand.
 | `CODEOWNERS`                                     | `protostrap.yaml` and `infra/` owned by whoever approves infrastructure          |
 
 **Pin base images by digest** in every Dockerfile, such as
-`FROM mcr.microsoft.com/dotnet/aspnet:10.0@sha256:…`. An image's tag is a hash of its
+`FROM mcr.microsoft.com/dotnet/aspnet:11.0@sha256:…`. An image's tag is a hash of its
 sources, so a second deployed environment builds the same tag prod did, but an unpinned
 base image may have changed in between.
 

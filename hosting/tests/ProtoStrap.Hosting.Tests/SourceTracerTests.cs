@@ -81,7 +81,7 @@ public class SourceTracerTests
         using var repo = new FixtureRepo();
         repo.Write("nuget.config", "<configuration />\n");
         repo.Write("services/NuGet.Config", "<configuration />\n");
-        repo.Write("global.json", """{ "sdk": { "version": "10.0.100", "rollForward": "latestFeature" } }""");
+        repo.Write("global.json", """{ "sdk": { "version": "11.0.100", "rollForward": "latestFeature" } }""");
         repo.Write("other/nuget.config", "<configuration />\n");
         repo.Project("services/api/Api.csproj");
 
@@ -102,11 +102,11 @@ public class SourceTracerTests
         repo.Write("global.json", """
             {
               // Every project builds with this SDK.
-              "sdk": { "version": "10.0.100", "rollForward": "latestFeature" }
+              "sdk": { "version": "11.0.100", "rollForward": "latestFeature" }
             }
 
             """);
-        repo.Write("services/legacy/global.json", """{ "sdk": { "version": "10.0.101", "rollForward": "latestFeature" } }""");
+        repo.Write("services/legacy/global.json", """{ "sdk": { "version": "10.0.100", "rollForward": "latestMajor" } }""");
         repo.Project("services/api/Api.csproj");
         repo.Project("services/legacy/Legacy.csproj");
         var tracer = new MSBuildSourceTracer(repo.Root);
@@ -114,8 +114,8 @@ public class SourceTracerTests
         var api = await tracer.TraceAsync(repo.PathOf("services/api/Api.csproj"), CancellationToken.None);
         var legacy = await tracer.TraceAsync(repo.PathOf("services/legacy/Legacy.csproj"), CancellationToken.None);
 
-        Assert.Equal(("global.json", "10.0.100"), (api.GlobalJson, api.SdkVersion));
-        Assert.Equal(("services/legacy/global.json", "10.0.101"), (legacy.GlobalJson, legacy.SdkVersion));
+        Assert.Equal(("global.json", "11.0.100"), (api.GlobalJson, api.SdkVersion));
+        Assert.Equal(("services/legacy/global.json", "10.0.100"), (legacy.GlobalJson, legacy.SdkVersion));
         // The project's directory covers its own global.json.
         Assert.Equal(["services/legacy"], legacy.Paths);
     }
@@ -138,7 +138,7 @@ public class SourceTracerTests
     public async Task AGlobalJsonOutsideTheRootPinsNothing()
     {
         using var repo = new FixtureRepo();
-        repo.Write("global.json", """{ "sdk": { "version": "10.0.100", "rollForward": "latestFeature" } }""");
+        repo.Write("global.json", """{ "sdk": { "version": "11.0.100", "rollForward": "latestFeature" } }""");
         repo.Project("app/services/api/Api.csproj");
 
         // The root is app/, where protostrap.yaml is, so the image tag can't hash the
@@ -216,14 +216,14 @@ public class SourceTracerTests
         using var repo = new FixtureRepo();
         repo.Project("services/api/Api.csproj", "Microsoft.NET.Sdk.Web", extra: """
               <PropertyGroup>
-                <ContainerBaseImage>mcr.microsoft.com/dotnet/aspnet:10.0@sha256:4f0c3a2c</ContainerBaseImage>
+                <ContainerBaseImage>mcr.microsoft.com/dotnet/aspnet:11.0@sha256:4f0c3a2c</ContainerBaseImage>
               </PropertyGroup>
             """);
         repo.Project("services/worker/Worker.csproj");
 
         var tracer = new MSBuildSourceTracer(repo.Root);
 
-        Assert.Equal("mcr.microsoft.com/dotnet/aspnet:10.0@sha256:4f0c3a2c",
+        Assert.Equal("mcr.microsoft.com/dotnet/aspnet:11.0@sha256:4f0c3a2c",
             (await tracer.TraceAsync(repo.PathOf("services/api/Api.csproj"), CancellationToken.None)).ContainerBaseImage);
         Assert.Null((await tracer.TraceAsync(repo.PathOf("services/worker/Worker.csproj"), CancellationToken.None)).ContainerBaseImage);
     }
@@ -269,7 +269,7 @@ public class SourceTracerTests
     {
         using var repo = new FixtureRepo();
         repo.Write("nuget.config", "<configuration />\n");
-        repo.Write("global.json", """{ "sdk": { "version": "10.0.100", "rollForward": "latestFeature" } }""");
+        repo.Write("global.json", """{ "sdk": { "version": "11.0.100", "rollForward": "latestFeature" } }""");
         repo.Project("services/shared/ServiceDefaults/ServiceDefaults.csproj");
         var api = repo.Project("services/api/Api.csproj", "Microsoft.NET.Sdk.Web", references: "services/shared/ServiceDefaults/ServiceDefaults.csproj");
         var builder = TestApp.Publish(repo);

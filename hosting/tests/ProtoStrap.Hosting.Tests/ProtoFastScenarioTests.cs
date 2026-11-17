@@ -37,7 +37,7 @@ public class ProtoFastScenarioTests
     private static void WriteRepository(FixtureRepo repo)
     {
         repo.Write("nuget.config", "<configuration />\n");
-        repo.Write("global.json", """{ "sdk": { "version": "10.0.100", "rollForward": "latestFeature" } }""");
+        repo.Write("global.json", """{ "sdk": { "version": "11.0.100", "rollForward": "latestFeature" } }""");
 
         const string shared = "services/shared";
         repo.Project($"{shared}/Database.Abstractions/Database.Abstractions.csproj");

@@ -1,6 +1,6 @@
 # The build context is sample/services/dotnet, so build from there:
 #   docker build -f Api/Dockerfile .
-FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+FROM mcr.microsoft.com/dotnet/sdk:11.0 AS build
 WORKDIR /src
 # Restore first, from the project files alone, so code changes reuse the cached packages.
 COPY Directory.Build.props Directory.Packages.props ./
@@ -11,7 +11,7 @@ COPY Shared/ Shared/
 COPY Api/ Api/
 RUN dotnet publish Api/Api.csproj --configuration Release --no-restore --output /app
 
-FROM mcr.microsoft.com/dotnet/aspnet:10.0
+FROM mcr.microsoft.com/dotnet/aspnet:11.0
 WORKDIR /app
 COPY --from=build /app .
 USER $APP_UID
