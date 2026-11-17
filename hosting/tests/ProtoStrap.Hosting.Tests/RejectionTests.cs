@@ -187,7 +187,7 @@ public class GlobalJsonRejectionTests
     public async Task AGlobalJsonInTheProjectsDirectoryPinsIt()
     {
         using var repo = new FixtureRepo();
-        repo.Write("services/api/global.json", """{ "sdk": { "version": "10.0.100", "rollForward": "latestFeature" } }""");
+        repo.Write("services/api/global.json", """{ "sdk": { "version": "11.0.100", "rollForward": "latestFeature" } }""");
         var builder = TestApp.Publish(repo);
         builder.AddEnvironment();
         builder.AddProject("api", repo.Project("services/api/Api.csproj", "Microsoft.NET.Sdk.Web"))

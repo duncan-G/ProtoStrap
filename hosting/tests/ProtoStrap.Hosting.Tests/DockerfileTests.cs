@@ -40,7 +40,7 @@ public class DockerfileTests
     public async Task AParentContextIsASource()
     {
         using var repo = new FixtureRepo();
-        repo.Write("services/dotnet/Api/Dockerfile", "FROM mcr.microsoft.com/dotnet/aspnet:10.0\n");
+        repo.Write("services/dotnet/Api/Dockerfile", "FROM mcr.microsoft.com/dotnet/aspnet:11.0\n");
         var builder = TestApp.Publish(repo);
         builder.AddEnvironment();
         builder.AddDockerfile("api", repo.PathOf("services/dotnet"), "Api/Dockerfile")
@@ -101,7 +101,7 @@ public class DockerfileTests
     public async Task ADockerfileNamedDockerfileDotSomethingIgnoreFileIsUsedFirst()
     {
         using var repo = new FixtureRepo();
-        repo.Write("services/dotnet/Api/Dockerfile", "FROM mcr.microsoft.com/dotnet/aspnet:10.0\n");
+        repo.Write("services/dotnet/Api/Dockerfile", "FROM mcr.microsoft.com/dotnet/aspnet:11.0\n");
         repo.Write("services/dotnet/Api/Dockerfile.dockerignore", "**/bin\n");
         repo.Write("services/dotnet/.dockerignore", "everything\n");
         var builder = TestApp.Publish(repo);

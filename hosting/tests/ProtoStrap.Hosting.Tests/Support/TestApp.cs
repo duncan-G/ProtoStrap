@@ -97,5 +97,5 @@ internal sealed class ProjectDirectoryTracer(string root) : ISourceTracer
         Task.FromResult(new ProjectSources(
             [.. new[] { Path.GetRelativePath(root, Path.GetDirectoryName(projectPath)!).Replace('\\', '/'), "global.json" }.Order(StringComparer.Ordinal)],
             GlobalJson: "global.json",
-            SdkVersion: "10.0.100"));
+            SdkVersion: "11.0.100"));
 }
