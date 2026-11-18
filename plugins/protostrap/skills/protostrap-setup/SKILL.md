@@ -45,17 +45,17 @@ Every reference names the same version. **Never point one at a branch, and never
 
 | Where                               | Form                                                                  |
 | ----------------------------------- | --------------------------------------------------------------------- |
-| The spec                            | `protostrap: 0.1.14` (from `WithVersion("0.1.14")` with Aspire)         |
-| Every reusable workflow call        | `uses: duncan-G/protostrap/.github/workflows/<name>.yml@v0.1.14` and `protostrap-ref: v0.1.14` |
-| CI's ProtoStrap checkout            | `ref: v0.1.14`                                                         |
-| Every Terraform root                | `source = "github.com/duncan-G/protostrap//infra/<module>?ref=v0.1.14"` |
-| ProtoStrap.Hosting (Aspire only)    | A checkout at `v0.1.14`, or `PackageReference … Version="0.1.14"` once published |
-| The Claude plugin, if pinned        | `.claude/settings.json`: the marketplace's `"ref": "v0.1.14"`          |
+| The spec                            | `protostrap: 0.1.15` (from `WithVersion("0.1.15")` with Aspire)         |
+| Every reusable workflow call        | `uses: duncan-G/protostrap/.github/workflows/<name>.yml@v0.1.15` and `protostrap-ref: v0.1.15` |
+| CI's ProtoStrap checkout            | `ref: v0.1.15`                                                         |
+| Every Terraform root                | `source = "github.com/duncan-G/protostrap//infra/<module>?ref=v0.1.15"` |
+| ProtoStrap.Hosting (Aspire only)    | A checkout at `v0.1.15`, or `PackageReference … Version="0.1.15"` once published |
+| The Claude plugin, if pinned        | `.claude/settings.json`: the marketplace's `"ref": "v0.1.15"`          |
 
 Find them all by the current version itself, then read each hit:
 
 ```bash
-grep -rnF --exclude-dir={.git,.protostrap,.terraform,bin,obj,node_modules} '0.1.14' .
+grep -rnF --exclude-dir={.git,.protostrap,.terraform,bin,obj,node_modules} '0.1.15' .
 ```
 
 ## Adding ProtoStrap to an application
