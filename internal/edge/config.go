@@ -28,6 +28,8 @@ type Route struct {
 	Path string `json:"path"`
 	// Rate is the number of requests per second allowed. Zero means no limit.
 	Rate float64 `json:"rate,omitempty"`
+	// Quiet keeps the route's requests out of the edge's logs and traces.
+	Quiet bool `json:"quiet,omitempty"`
 }
 
 // Service is a component the gateway routes to.
@@ -395,7 +397,17 @@ func listener(services []Service, cfg Routing) obj {
 const requestLine = "%REQ(:METHOD)% %REQ(:AUTHORITY)%%PATH(NQ:ORIG_OR_PATH)% %PROTOCOL% -> " +
 	"%UPSTREAM_CLUSTER% %RESPONSE_CODE% %RESPONSE_FLAGS% %DURATION%ms"
 
-var stdoutAccessLog = obj{"name": "envoy.access_loggers.stdout", "typed_config": obj{
+// quietMetadata marks a quiet route, whose requests notQuiet leaves out of the access logs.
+const quietMetadata = "protostrap_quiet"
+
+// notQuiet logs a request unless its route is quiet. A request no route matched has no route
+// name, and its metadata can't be read, which would leave it out too.
+var notQuiet = obj{"extension_filter": obj{"name": "envoy.access_loggers.extension_filters.cel", "typed_config": obj{
+	"@type":      "type.googleapis.com/envoy.extensions.access_loggers.filters.cel.v3.ExpressionFilter",
+	"expression": "!has(xds.route_name) || !has(xds.route_metadata.filter_metadata." + quietMetadata + ")",
+}}}
+
+var stdoutAccessLog = obj{"name": "envoy.access_loggers.stdout", "filter": notQuiet, "typed_config": obj{
 	"@type":      "type.googleapis.com/envoy.extensions.access_loggers.stream.v3.StdoutAccessLog",
 	"log_format": obj{"text_format_source": obj{"inline_string": requestLine + "\n"}},
 }}
@@ -447,7 +459,7 @@ func (t *Telemetry) grpcService() obj {
 // parts as attributes. Envoy gives it the request's trace and span.
 func (t *Telemetry) accessLog() obj {
 	attr := func(k, v string) obj { return obj{"key": k, "value": obj{"string_value": v}} }
-	return obj{"name": "envoy.access_loggers.open_telemetry", "typed_config": obj{
+	return obj{"name": "envoy.access_loggers.open_telemetry", "filter": notQuiet, "typed_config": obj{
 		"@type":               "type.googleapis.com/envoy.extensions.access_loggers.open_telemetry.v3.OpenTelemetryAccessLogConfig",
 		"grpc_service":        t.grpcService(),
 		"log_name":            t.service(),
@@ -529,6 +541,10 @@ func virtualHost(host string, routes []routeEntry) obj {
 				// Retry only what never reached a replica, such as one that just stopped.
 				"retry_policy": obj{"retry_on": "connect-failure,refused-stream,reset-before-request", "num_retries": 2},
 			},
+		}
+		if r.Quiet {
+			route["metadata"] = obj{"filter_metadata": obj{quietMetadata: obj{}}}
+			route["tracing"] = obj{"overall_sampling": obj{"numerator": 0}}
 		}
 		perFilter := obj{}
 		if !r.grpcWeb {

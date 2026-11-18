@@ -250,6 +250,8 @@ cdn:
   authorizer is asked about that path. A path with `%2F` or `%5C` gets a 307 to the same
   path with `/` in its place.
 - `{ route: /py/, rate: 200/s }` rate-limits a route at the gateway.
+- `{ route: app/otlp/, quiet: true }` keeps a route's requests out of the gateway's logs and
+  traces, as for browsers' telemetry.
 - External clients can't use native gRPC through the tunnel. They use gRPC-Web, which the
   gateway translates for `protocol: grpc` upstreams (any other gets it as sent), or HTTP/JSON
   endpoints the service serves itself. Services call each other with

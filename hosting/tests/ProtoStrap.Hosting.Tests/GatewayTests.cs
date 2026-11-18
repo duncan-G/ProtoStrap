@@ -36,7 +36,7 @@ public class GatewayTests
         protostrap.AddTelemetry("telemetry");
         var api = AddApi(builder, repo);
         var web = AddWeb(builder, repo);
-        gateway.WithUpstream(web, u => u.Routes("app/", "admin/")).WithUpstream(api, u => u.Route("app/api/", rate: 50));
+        gateway.WithUpstream(web, u => u.Routes("app/", "admin/")).WithUpstream(api, u => u.Route("app/api/", rate: 50).Route("app/otlp/", quiet: true).Route("admin/otlp/", rate: 20, quiet: true));
 
         var yaml = await TestApp.GenerateYamlAsync(builder);
 
@@ -49,7 +49,10 @@ public class GatewayTests
                 app: protofast.dev
               upstreams:
                 api:
-                  routes: [{ route: app/api/, rate: 50/s }]
+                  routes:
+                    - { route: app/api/, rate: 50/s }
+                    - { route: app/otlp/, quiet: true }
+                    - { route: admin/otlp/, rate: 20/s, quiet: true }
                 web:
                   routes: [app/, admin/]
 

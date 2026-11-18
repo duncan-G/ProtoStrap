@@ -1015,18 +1015,24 @@ internal sealed partial class SpecGenerator(
                 Problem(c, $"Routes: a route names its host by its name, such as {gateway.Hosts.Keys.Order(StringComparer.Ordinal).FirstOrDefault() ?? "app"}{(path.Length > 0 ? path : "/")}, not {host}");
             else if (host.Length > 0 && !gateway.Hosts.ContainsKey(host))
                 Problem(c, $"Routes: no host {host}: call WithHost(\"{host}\", ...) on {gateway.Name}");
-            if (route.Rate is not { } rate)
+            if (route.Rate is null && !route.Quiet)
             {
                 items.Add(route.Route);
+                continue;
             }
-            else if (Quantity.Rate(rate) is { } perSecond)
+            var map = new YamlMap { ["route"] = route.Route };
+            if (route.Rate is { } rate)
             {
-                items.Add(new YamlMap { ["route"] = route.Route, ["rate"] = perSecond });
+                if (Quantity.Rate(rate) is not { } perSecond)
+                {
+                    Problem(c, $"Routes: the rate of {route.Route} must be above 0 requests per second");
+                    continue;
+                }
+                map["rate"] = perSecond;
             }
-            else
-            {
-                Problem(c, $"Routes: the rate of {route.Route} must be above 0 requests per second");
-            }
+            if (route.Quiet)
+                map["quiet"] = YamlScalar.Bool(true);
+            items.Add(map);
         }
         return items.Count > 0 ? new YamlSeq(items.ToArray()) : null;
     }

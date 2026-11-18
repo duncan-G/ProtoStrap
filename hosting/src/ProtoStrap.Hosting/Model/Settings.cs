@@ -52,7 +52,7 @@ internal sealed class UpstreamSettings(IResource resource)
     public AuthorizeSettings? Authorize { get; set; }
 }
 
-internal sealed record RouteSettings(string Route, double? Rate);
+internal sealed record RouteSettings(string Route, double? Rate, bool Quiet = false);
 
 /// <summary>RateLimitSettings are what WithRateLimit gave the CDN.</summary>
 internal sealed record RateLimitSettings(int Requests, TimeSpan Period);

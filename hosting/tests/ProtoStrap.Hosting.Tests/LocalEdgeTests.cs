@@ -82,7 +82,7 @@ public class LocalEdgeTests
             .WithHttpEndpoint(targetPort: 9000, name: "management")
             .PublishAsProtoStrapService(s => s.Request(cpu: "1000m", memory: "1Gi").Ready(Readiness.Http("/health/ready").On(9000)));
         gateway.WithUpstream(api, u => u.Route("app/api/", rate: 50).Authorize(auth, path: "/auth/check", headers: ["x-user"], forward: ["cookie"], respond: ["set-cookie"]))
-            .WithUpstream(keycloak, u => u.Routes("auth/realms/", "auth/resources/"));
+            .WithUpstream(keycloak, u => u.Routes("auth/realms/", "auth/resources/").Route("auth/otlp/", quiet: true));
         builder.AddProject("worker", repo.Project("services/worker/Worker.csproj"))
             .PublishAsProtoStrapWorker(w => w.Request(cpu: "250m", memory: "256Mi"));
 
@@ -145,6 +145,11 @@ public class LocalEdgeTests
                     {
                       "host": "auth",
                       "path": "/resources/"
+                    },
+                    {
+                      "host": "auth",
+                      "path": "/otlp/",
+                      "quiet": true
                     }
                   ],
                   "address": "keycloak:8080",

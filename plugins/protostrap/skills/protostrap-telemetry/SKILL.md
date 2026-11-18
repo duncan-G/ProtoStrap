@@ -150,7 +150,8 @@ are kept, in CloudWatch Logs, which an Org Admin reads.
 The collector isn't reachable from the internet. To take telemetry from browsers, run a
 collector of the application's own as a service: a Dockerfile `FROM` the OpenTelemetry
 collector's image, pinned by digest, with its config in the image, an upstream with a route
-such as `/otlp/`, a `rate` on that route, and an exporter to `http://telemetry:4318` over
+such as `/otlp/`, a `rate` and `quiet: true` on that route (so the gateway doesn't log and
+trace each export), and an exporter to `http://telemetry:4318` over
 OTLP/HTTP. Anyone can send to that route, so accept only what the browser code sends.
 
 ## A collector of the application's own

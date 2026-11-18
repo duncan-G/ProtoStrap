@@ -97,6 +97,30 @@ func TestRoutingIsJSON(t *testing.T) {
 	}
 }
 
+// A quiet route's requests, such as browsers' telemetry on its way to a collector, are in
+// neither the edge's access logs nor its traces. Every other request is still logged, one no
+// route matched included.
+func TestAQuietRouteIsNeitherLoggedNorTraced(t *testing.T) {
+	r := local()
+	r.Local = true
+	r.Telemetry = &Telemetry{Address: "telemetry:4317"}
+	r.Services = append(r.Services, Service{Name: "collector", Port: 4318, Ready: "/", Routes: []Route{{Host: "admin", Path: "/otlp/", Quiet: true}}})
+	lds := decode(t, Files(r)["edge/lds.json"])
+	hcm := jsonOf(lds["resources"].([]any)[0].(map[string]any)["filter_chains"].([]any)[0].(map[string]any)["filters"].([]any)[0].(map[string]any)["typed_config"].(map[string]any)["access_log"])
+	filter := `"expression":"!has(xds.route_name) || !has(xds.route_metadata.filter_metadata.protostrap_quiet)"`
+	if strings.Count(hcm, filter) != 2 {
+		t.Errorf("each access log should skip quiet routes:\n%s", hcm)
+	}
+	all := jsonOf(lds)
+	quiet := `"match":{"prefix":"/otlp/"},"metadata":{"filter_metadata":{"protostrap_quiet":{}}}`
+	if !strings.Contains(all, quiet) || strings.Count(all, "protostrap_quiet\":{}") != 1 {
+		t.Errorf("only the quiet route should be marked:\n%s", all)
+	}
+	if !strings.Contains(all, `"tracing":{"overall_sampling":{"numerator":0}}`) || strings.Count(all, "overall_sampling") != 1 {
+		t.Errorf("only the quiet route should go untraced:\n%s", all)
+	}
+}
+
 // PROTOSTRAP_ENVOY_TEST=1 has Envoy validate the local edge's bootstrap, and its listener and
 // clusters, which validate mode doesn't read through the bootstrap.
 func TestEnvoyAcceptsTheLocalEdge(t *testing.T) {
@@ -104,11 +128,11 @@ func TestEnvoyAcceptsTheLocalEdge(t *testing.T) {
 		t.Skip("set PROTOSTRAP_ENVOY_TEST=1 to validate with Envoy in Docker")
 	}
 	dir := t.TempDir()
-	// It logs each request, and api and web are authorized, one with a header forwarded and
+	// It logs each request but a quiet route's, and api and web are authorized, one with a header forwarded and
 	// a cookie for the client, the other open, with its static files skipped.
 	r := local()
 	r.Local = true
-	r.Services = append(r.Services, Service{Name: "auth", Port: 8080, Ready: "/healthz", Routes: []Route{{Host: "admin", Path: "/auth/"}},
+	r.Services = append(r.Services, Service{Name: "auth", Port: 8080, Ready: "/healthz", Routes: []Route{{Host: "admin", Path: "/auth/"}, {Host: "admin", Path: "/auth/otlp/", Quiet: true}},
 		Address: "host.docker.internal:51300"})
 	r.Services[0].Authorize = &Authorize{By: "auth", Path: "/auth/check", Headers: []string{"x-identity"}, Forward: []string{"cookie"}, Respond: []string{"set-cookie"}}
 	r.Services[2].Authorize = &Authorize{By: "auth", Path: "/auth/check", Headers: []string{"x-identity"}, Open: true, Timeout: "500ms",
@@ -185,7 +209,7 @@ func TestTheLocalEdgeLogsEachRequest(t *testing.T) {
 	r.Local = true
 	got := jsonOf(decode(t, Files(r)["edge/lds.json"]))
 	for _, want := range []string{
-		`"access_log":[{"name":"envoy.access_loggers.stdout"`,
+		`"name":"envoy.access_loggers.stdout"`,
 		`"@type":"type.googleapis.com/envoy.extensions.access_loggers.stream.v3.StdoutAccessLog"`,
 		`%REQ(:METHOD)% %REQ(:AUTHORITY)%%PATH(NQ:ORIG_OR_PATH)%`,
 		`%RESPONSE_CODE% %RESPONSE_FLAGS%`, `%UPSTREAM_CLUSTER%`,

@@ -306,10 +306,11 @@ internal static class LocalEdge
     private static RoutedRoute Route(RouteSettings route)
     {
         var text = route.Route;
+        var quiet = route.Quiet ? true : (bool?)null;
         if (text.StartsWith('/'))
-            return new(null, text, route.Rate);
+            return new(null, text, route.Rate, quiet);
         var slash = text.IndexOf('/');
-        return slash < 0 ? new(text, "/", route.Rate) : new(text[..slash], text[slash..], route.Rate);
+        return slash < 0 ? new(text, "/", route.Rate, quiet) : new(text[..slash], text[slash..], route.Rate, quiet);
     }
 
     /// <summary>
@@ -360,7 +361,7 @@ internal static class LocalEdge
         string Name, int Port, string Ready, string Protocol, IReadOnlyList<RoutedRoute>? Routes, RoutedAuthorize? Authorize,
         string Address, int? HealthPort);
 
-    private sealed record RoutedRoute(string? Host, string Path, double? Rate);
+    private sealed record RoutedRoute(string? Host, string Path, double? Rate, bool? Quiet);
 
     internal sealed record RoutedTelemetry(string Address, bool? Tls, IReadOnlyDictionary<string, string>? Headers, string Service);
 
