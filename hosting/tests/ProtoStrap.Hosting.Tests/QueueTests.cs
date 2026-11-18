@@ -186,7 +186,13 @@ public class QueueTests
             #!/bin/bash
             # Written by ProtoStrap.Hosting: the queues and buckets of the AppHost, as ProtoStrap names them.
             set -euo pipefail
+            cors() {
+              local origins
+              origins=$(env | sed -n 's/^ORIGIN_[A-Z0-9_]*=\(.*\)$/"\1"/p' | paste -sd, -)
+              awslocal s3api put-bucket-cors --bucket "$1" --cors-configuration "{\"CORSRules\":[{\"AllowedMethods\":[\"GET\",\"PUT\",\"POST\",\"HEAD\"],\"AllowedOrigins\":[${origins:-\"*\"}],\"AllowedHeaders\":[\"*\"],\"ExposeHeaders\":[\"ETag\"],\"MaxAgeSeconds\":3600}]}" >/dev/null
+            }
             awslocal s3api create-bucket --bucket protostrap-files >/dev/null
+            cors protostrap-files
             awslocal sqs create-queue --queue-name protostrap-outcomes.fifo --attributes '{"FifoQueue":"true","VisibilityTimeout":"300"}' >/dev/null
             awslocal sqs create-queue --queue-name protostrap-uploads >/dev/null
 

@@ -319,8 +319,8 @@ The component reads a queue's URL from `QUEUE_<NAME>_URL`, a bucket's name from
 `BUCKET_<NAME>`, and the files bucket's from `FILES_BUCKET`. ProtoStrap sets them in every
 replica ([Application contract](protostrap.md#application-contract)), and `WithReference`
 sets them to LocalStack's in run mode, where a bucket is versioned and locked as the spec
-says. LocalStack keeps every object and answers every origin, so `expire` and `browser` only
-apply in an account.
+says, and the files bucket and each `browser` bucket answer the gateway's local origins (any
+origin without a gateway). LocalStack keeps every object, so `expire` only applies in an account.
 
 ### Dev-only resources
 

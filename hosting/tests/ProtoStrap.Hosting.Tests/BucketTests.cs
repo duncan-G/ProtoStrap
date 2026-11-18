@@ -211,7 +211,7 @@ public class BucketTests
     }
 
     [Fact]
-    public async Task LocalStacksInitScriptCreatesEveryBucket()
+    public async Task LocalStacksInitScriptCreatesEveryBucketWithBrowserAccessWhereTheSpecGivesIt()
     {
         using var repo = new FixtureRepo();
         var builder = TestApp.Run(repo);
@@ -231,9 +231,16 @@ public class BucketTests
             #!/bin/bash
             # Written by ProtoStrap.Hosting: the queues and buckets of the AppHost, as ProtoStrap names them.
             set -euo pipefail
+            cors() {
+              local origins
+              origins=$(env | sed -n 's/^ORIGIN_[A-Z0-9_]*=\(.*\)$/"\1"/p' | paste -sd, -)
+              awslocal s3api put-bucket-cors --bucket "$1" --cors-configuration "{\"CORSRules\":[{\"AllowedMethods\":[\"GET\",\"PUT\",\"POST\",\"HEAD\"],\"AllowedOrigins\":[${origins:-\"*\"}],\"AllowedHeaders\":[\"*\"],\"ExposeHeaders\":[\"ETag\"],\"MaxAgeSeconds\":3600}]}" >/dev/null
+            }
             awslocal s3api create-bucket --bucket protostrap-files --create-bucket-configuration LocationConstraint=eu-west-1 >/dev/null
+            cors protostrap-files
             awslocal s3api create-bucket --bucket protostrap-documents --create-bucket-configuration LocationConstraint=eu-west-1 --object-lock-enabled-for-bucket >/dev/null
             awslocal s3api put-bucket-versioning --bucket protostrap-documents --versioning-configuration Status=Enabled >/dev/null
+            cors protostrap-documents
             awslocal s3api create-bucket --bucket protostrap-history --create-bucket-configuration LocationConstraint=eu-west-1 >/dev/null
             awslocal s3api put-bucket-versioning --bucket protostrap-history --versioning-configuration Status=Enabled >/dev/null
             awslocal s3api create-bucket --bucket protostrap-scratch --create-bucket-configuration LocationConstraint=eu-west-1 >/dev/null
