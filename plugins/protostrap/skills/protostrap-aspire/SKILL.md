@@ -198,6 +198,7 @@ builder.AddProject<Projects.Shop_OrdersWorker>("orders-worker")
 | `.WithRateLimit(requests: 300)`               | `rate_limit: { requests: 300, period: 10s }`                 |
 | `.WithWafRule(name, r => …)`, `.WithCacheRule(name, r => …)` | An item of `waf` or `cache`, one line each, in the order added |
 | `gateway.WithUpstream(api, u => u.Routes("shop/api/").Route("/py/", rate: 200))` | `gateway.upstreams.api.routes: [shop/api/, { route: /py/, rate: 200/s }]` |
+| `u.Route("shop/otlp/", rate: 20, quiet: true)` | `{ route: shop/otlp/, rate: 20/s, quiet: true }`: out of the gateway's logs and traces |
 | `u.Protocol(GatewayProtocol.Http2)`           | `protocol: http2`                                            |
 | `u.Authorize(auth, path: "/auth/check", headers: ["x-user"], forward: ["cookie"], respond: ["set-cookie"])` | `authorize`: the gateway asks `auth` about each request first; `auth` needn't be an upstream |
 | `u.Authorize(auth, open: true, timeout: TimeSpan.FromMilliseconds(500), skip: ["/assets/", "*.js"])` | `open`, `timeout: 500ms`, `skip`: requests `auth` can't answer for go on anonymously, and static files aren't asked about |

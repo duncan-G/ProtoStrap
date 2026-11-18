@@ -117,7 +117,7 @@ Each key is a service component; one route goes to one upstream.
 | Field       | Meaning                                                                          |
 | ----------- | -------------------------------------------------------------------------------- |
 | `protocol`  | What the gateway speaks to it: `http1`, `http2` or `grpc`. Default `grpc` with `ready: grpc`, otherwise `http1`. A gRPC `ready` needs `http2` or `grpc` |
-| `routes`    | Required, at least one. A host's name and a path prefix (`shop/api/`), or a path for every host (`/api/`), or `{ route, rate }` |
+| `routes`    | Required, at least one. A host's name and a path prefix (`shop/api/`), or a path for every host (`/api/`), or `{ route, rate, quiet }`, where `quiet: true` keeps its requests out of the gateway's logs and traces |
 | `authorize` | `{ by, path, headers, forward, respond, open, timeout, skip }`: a service the gateway asks about each request to these routes first, which needn't be an upstream. `open: true` sends on what it can't answer for; `timeout` default 2 s, at most 5 s; `skip` lists prefixes under the routes (`/assets/`) and quoted extensions (`"*.js"`, up to 30) it isn't asked about |
 
 An upstream's `ready` can't be a command: the gateway checks it too.

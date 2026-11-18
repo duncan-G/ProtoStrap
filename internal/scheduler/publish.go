@@ -92,7 +92,7 @@ func EdgeServices(sp *spec.Spec) []edge.Service {
 			continue
 		}
 		for _, r := range u.Routes {
-			svc.Routes = append(svc.Routes, edge.Route{Host: r.Host, Path: r.Path, Rate: float64(r.Rate)})
+			svc.Routes = append(svc.Routes, edge.Route{Host: r.Host, Path: r.Path, Rate: float64(r.Rate), Quiet: r.Quiet})
 		}
 		if a := u.Authorize; a != nil {
 			svc.Authorize = &edge.Authorize{By: a.By, Path: a.CheckPath(), Headers: a.Headers, Forward: a.Forward, Respond: a.Respond,

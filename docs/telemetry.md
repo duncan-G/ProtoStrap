@@ -173,12 +173,15 @@ as `service_name="edge"`. Nothing needs setting.
   scheduler sets in the edge alone.
 - **The edge writes no request line to stdout,** which would reach Loki a second time. Envoy's
   own warnings still do.
+- **A quiet route's requests are left out,** of the log records, the spans and the line on
+  stdout, as for browsers' telemetry ([From browsers](#from-browsers)).
 
 ### From browsers
 
 The collector takes nothing from the internet: it is on the overlay only. To collect
 telemetry from browsers, run a collector of the application's own as a service with a
-route, and have it export to `http://telemetry:4318`.
+route, and have it export to `http://telemetry:4318`. Make the route `quiet`, so each export
+isn't a request the edge logs and traces in turn.
 
 
 ## Reading telemetry

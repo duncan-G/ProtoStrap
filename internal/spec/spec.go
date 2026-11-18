@@ -362,6 +362,8 @@ type Route struct {
 	Path string
 	// Rate is the requests per second allowed, or 0 for no limit.
 	Rate Rate
+	// Quiet keeps the route's requests out of the gateway's logs and traces.
+	Quiet bool
 }
 
 func (r *Route) UnmarshalYAML(n *yaml.Node) error {
@@ -373,13 +375,14 @@ func (r *Route) UnmarshalYAML(n *yaml.Node) error {
 		var m struct {
 			Route string `yaml:"route"`
 			Rate  Rate   `yaml:"rate"`
+			Quiet bool   `yaml:"quiet"`
 		}
 		if err := yaml.Decode(n, &m); err != nil {
 			return err
 		}
-		match, r.Rate = m.Route, m.Rate
+		match, r.Rate, r.Quiet = m.Route, m.Rate, m.Quiet
 	default:
-		return fmt.Errorf(`want a route like "app/api/" or "/api/", or { route: ..., rate: 100/s }`)
+		return fmt.Errorf(`want a route like "app/api/" or "/api/", or { route: ..., rate: 100/s, quiet: true }`)
 	}
 	if match == "" {
 		return fmt.Errorf("empty route")

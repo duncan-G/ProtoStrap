@@ -144,8 +144,16 @@ public sealed class ProtoStrapUpstream
         return this;
     }
 
-    /// <summary>Route adds a route with a rate limit, in requests per second across every replica.</summary>
-    public ProtoStrapUpstream Route(string route, double rate) { Settings.Routes.Add(new(route, rate)); return this; }
+    /// <summary>
+    /// Route adds a route with a rate limit, in requests per second across every replica. A
+    /// quiet route's requests are in neither the gateway's logs nor its traces, such as
+    /// browsers' telemetry on its way to a collector.
+    /// </summary>
+    public ProtoStrapUpstream Route(string route, double? rate = null, bool quiet = false)
+    {
+        Settings.Routes.Add(new(route, rate, quiet));
+        return this;
+    }
 
     /// <summary>
     /// Protocol sets what the gateway speaks to the service, which defaults to Grpc when the

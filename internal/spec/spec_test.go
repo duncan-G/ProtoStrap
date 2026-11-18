@@ -370,6 +370,7 @@ func TestRoutes(t *testing.T) {
 		{"/api/", Route{Path: "/api/"}},
 		{"shop", Route{Host: "shop", Path: "/"}},
 		{"{ route: /py/, rate: 200/s }", Route{Path: "/py/", Rate: 200}},
+		{"{ route: app/otlp/, rate: 20/s, quiet: true }", Route{Host: "app", Path: "/otlp/", Rate: 20, Quiet: true}},
 	}
 	for _, tt := range tests {
 		s := mustParse(t, strings.Replace(docsExample, "routes: [shop/api/]", "routes: ["+tt.in+"]", 1))
