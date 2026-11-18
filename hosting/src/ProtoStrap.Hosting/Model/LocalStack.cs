@@ -57,8 +57,11 @@ internal static class LocalStack
 
     /// <summary>
     /// InitScript makes the init script, which creates the files bucket, if there is one, then
-    /// each of the application's buckets, then each queue. A bucket's expiry and browser access
-    /// are left to ProtoStrap's account: LocalStack keeps every object and answers every origin.
+    /// each of the application's buckets, then each queue. The files bucket and each browser
+    /// bucket get the account's CORS rule, for the origins the gateway gives every resource as
+    /// ORIGIN_&lt;NAME&gt; (any origin without a gateway): LocalStack, like S3, refuses a browser's
+    /// preflight on a bucket with none. A bucket's expiry is left to ProtoStrap's account:
+    /// LocalStack keeps every object.
     /// </summary>
     public static ContainerFile InitScript(IEnumerable<IResource> resources, string region)
     {
@@ -67,6 +70,18 @@ internal static class LocalStack
             .Append("#!/bin/bash\n")
             .Append("# Written by ProtoStrap.Hosting: the queues and buckets of the AppHost, as ProtoStrap names them.\n")
             .Append("set -euo pipefail\n");
+        // The account's rule (infra/platform/buckets.tf), for the origins in this container's
+        // environment, read when the script runs.
+        const string Cors = """
+            cors() {
+              local origins
+              origins=$(env | sed -n 's/^ORIGIN_[A-Z0-9_]*=\(.*\)$/"\1"/p' | paste -sd, -)
+              awslocal s3api put-bucket-cors --bucket "$1" --cors-configuration "{\"CORSRules\":[{\"AllowedMethods\":[\"GET\",\"PUT\",\"POST\",\"HEAD\"],\"AllowedOrigins\":[${origins:-\"*\"}],\"AllowedHeaders\":[\"*\"],\"ExposeHeaders\":[\"ETag\"],\"MaxAgeSeconds\":3600}]}" >/dev/null
+            }
+
+            """;
+        if (all.OfType<ProtoStrapFilesResource>().Any() || all.OfType<ProtoStrapBucketResource>().Any(b => b.Browser))
+            script.Append(Cors);
         void CreateBucket(string name, bool locked)
         {
             script.Append("awslocal s3api create-bucket --bucket ").Append(name);
@@ -77,13 +92,18 @@ internal static class LocalStack
             script.Append(" >/dev/null\n");
         }
         if (all.OfType<ProtoStrapFilesResource>().Any())
+        {
             CreateBucket(ProtoStrapFilesResource.RunModeBucket, locked: false);
+            script.Append("cors ").Append(ProtoStrapFilesResource.RunModeBucket).Append('\n');
+        }
         foreach (var bucket in all.OfType<ProtoStrapBucketResource>().OrderBy(b => b.Name, StringComparer.Ordinal))
         {
             CreateBucket(bucket.RunModeBucket, bucket.Locked);
             if (bucket.Versions is not null)
                 script.Append("awslocal s3api put-bucket-versioning --bucket ").Append(bucket.RunModeBucket)
                     .Append(" --versioning-configuration Status=Enabled >/dev/null\n");
+            if (bucket.Browser)
+                script.Append("cors ").Append(bucket.RunModeBucket).Append('\n');
         }
         foreach (var queue in all.OfType<ProtoStrapQueueResource>().OrderBy(q => q.Name, StringComparer.Ordinal))
         {

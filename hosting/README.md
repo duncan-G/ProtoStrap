@@ -189,8 +189,9 @@ locally: requests reach the gateway directly, and the dashboard has the services
 In run mode, `AddProtoStrapQueue`, `AddProtoStrapBucket` and `AddProtoStrapFiles` add one
 LocalStack container, `protostrap-localstack`, which creates each queue and bucket, as
 `protostrap-<name>`, and the files bucket, `protostrap-files`, before any component that
-references them starts. A bucket is versioned and locked as the spec says; LocalStack keeps
-every object and answers every origin, so `expire` and `browser` only apply in an account.
+references them starts. A bucket is versioned and locked as the spec says, and the files bucket
+and each `browser` bucket answer the gateway's local origins (any origin without a gateway);
+LocalStack keeps every object, so `expire` only applies in an account.
 The reference sets what ProtoStrap sets in every replica, pointed at LocalStack:
 
 | Variable                                   | Value                                         |
