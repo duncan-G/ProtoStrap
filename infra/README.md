@@ -69,7 +69,7 @@ ProtoStrap version:
 
 ```hcl
 module "protostrap" {
-  source = "github.com/duncan-G/protostrap//infra/platform?ref=v0.1.17"
+  source = "github.com/duncan-G/protostrap//infra/platform?ref=v0.1.18"
 
   spec                  = file("${path.module}/../../protostrap.yaml")
   environment           = "prod"
