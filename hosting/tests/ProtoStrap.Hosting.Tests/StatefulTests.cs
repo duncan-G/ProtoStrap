@@ -32,7 +32,7 @@ public class StatefulTests
         Assert.Equal("""
             postgres:
               kind: stateful
-              image: postgres:18.3
+              image: postgres:18.6
               vm: data-1
               request: { cpu: 2000m, memory: 8Gi }
               port: 5432
@@ -108,7 +108,7 @@ public class StatefulTests
         Assert.Equal("""
             redis:
               kind: stateful
-              image: redis:8.6
+              image: redis:8.10
               command: [sh, -c, exec docker-entrypoint.sh redis-server --requirepass "$(cat /run/secrets/REDIS_PASSWORD)"]
               vm: data-1
               request: { cpu: 500m, memory: 1Gi }
@@ -161,7 +161,7 @@ public class StatefulTests
         Assert.Equal("""
             redis:
               kind: stateful
-              image: redis:8.6
+              image: redis:8.10
               command: [redis-server, --appendonly, "yes", --maxmemory, 768mb]
               vm: data-1
               request: { cpu: 500m, memory: 1Gi }

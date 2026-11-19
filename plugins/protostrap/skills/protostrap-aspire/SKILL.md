@@ -305,4 +305,6 @@ image then changes the build without a commit. Pin it before production.
 Until the package is on NuGet, the AppHost references its project from a ProtoStrap checkout
 at the same version, through an MSBuild property (`.protostrap/`, where CI checks it out, or
 `../ProtoStrap`), with `IsAspireProjectResource="false"`. The package pins an Aspire version
-(13.6.5 for 0.1.15) and targets net11.0: use the same `Aspire.AppHost.Sdk` and a net11.0 AppHost.
+(17.0.0 for 0.1.15) and targets net11.0: use the same `Aspire.AppHost.Sdk` and a net11.0 AppHost.
+Register .NET components with `AddProject`, which Aspire 17 marks obsolete (CS0618): the spec
+generator doesn't read `AddDotnetProject`'s `DotnetProjectResource` yet.

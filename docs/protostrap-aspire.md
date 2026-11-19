@@ -603,7 +603,7 @@ components:
 
   postgres:
     kind: stateful
-    image: postgres:18.3
+    image: postgres:18.6
     vm: data-1
     request: { cpu: 2000m, memory: 8Gi }
     port: 5432
