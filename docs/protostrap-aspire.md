@@ -320,7 +320,19 @@ The component reads a queue's URL from `QUEUE_<NAME>_URL`, a bucket's name from
 replica ([Application contract](protostrap.md#application-contract)), and `WithReference`
 sets them to LocalStack's in run mode, where a bucket is versioned and locked as the spec
 says, and the files bucket and each `browser` bucket answer the gateway's local origins (any
-origin without a gateway). LocalStack keeps every object, so `expire` only applies in an account.
+origin without a gateway). LocalStack keeps every object while it runs, so `expire` only applies
+in an account, and it starts empty on every run.
+
+**Dev's bucket** holds what developers share that LocalStack would lose, such as a model a
+local run trained. It is `<app>-<account>-<region>-dev`, in the application's account beside
+dev's secret. It isn't in the spec and nothing deploys it: like dev's secret, a developer makes
+it once, with the Developer permission set, which lets them list, read and add objects but
+delete none ([People](identity.md#people)). Leave out `--create-bucket-configuration` in
+us-east-1.
+
+```bash
+aws s3api create-bucket --bucket <app>-<account>-<region>-dev --region <region> --create-bucket-configuration LocationConstraint=<region> --profile developer
+```
 
 ### Dev-only resources
 
