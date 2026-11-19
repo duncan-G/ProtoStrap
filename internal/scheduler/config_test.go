@@ -370,6 +370,43 @@ func TestConfigureRunsAgainOnlyWhenItsInputsChange(t *testing.T) {
 	}
 }
 
+// TestTheConfigureTaskWaitsForReplacedReplicasToStop checks that a configure task doesn't
+// start while a replaced replica of its component is still stopping: the task reaches the
+// component by name, and a replica that is shutting down can still take, and then drop, its
+// connections.
+func TestTheConfigureTaskWaitsForReplacedReplicasToStop(t *testing.T) {
+	h := newHarness(t)
+	h.settleConfig()
+	h.stopSteps = map[string]int{"idp": 5}
+	h.deployWith("c2", configSpec, map[string]string{"idp": "v2"}, configV1)
+	started := false
+	h.until("c2 finishes", 10*time.Minute, func() bool {
+		if !started && len(h.taskRuns["idp-config"]) == 2 {
+			started = true
+			if n := h.stoppingReplicas("idp"); n > 0 {
+				t.Errorf("idp-config started while %d replaced idp replicas were still stopping", n)
+			}
+		}
+		return h.rollout("c2") == RolloutDone
+	})
+	if !started {
+		t.Errorf("idp-config didn't run for the new idp")
+	}
+}
+
+// stoppingReplicas counts a component's replicas that are still shutting down on any VM.
+func (h *harness) stoppingReplicas(component string) int {
+	n := 0
+	for _, a := range h.agents {
+		for _, r := range a.replicas {
+			if r.spec.Component == component && r.state == api.StateStopping && !r.gone {
+				n++
+			}
+		}
+	}
+	return n
+}
+
 func TestAFailedConfigureRollsBackAndAppliesTheLastGoodAgain(t *testing.T) {
 	h := newHarness(t)
 	h.settleConfig()

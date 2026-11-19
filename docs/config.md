@@ -125,7 +125,9 @@ Nothing else runs it: not scaling, not another component's release, not a new ro
 release that changes nothing it applies doesn't run it.
 
 - **It waits for the component to roll out.** It runs once every replica of the component
-  is of the release, has its keys and config files, and one is ready.
+  is of the release, has its keys and config files, and one is ready, and the replicas the
+  release replaced have stopped: one that is shutting down still answers to the component's
+  name, and drops the task's connections when it goes.
 - **What depends on the component waits for it.** A component that `depends_on` it starts
   its first replica, and in a release its new replicas, only once the task has run. A new
   key for both waits for the task too, so the component sets a client secret before the

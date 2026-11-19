@@ -62,7 +62,7 @@ resource "aws_ssm_document" "deploy" {
   tags            = local.tags
   content = jsonencode({
     schemaVersion = "2.2"
-    description   = "Deploy a ProtoStrap release: protostrap deploy <commit>, on data-1."
+    description   = "Deploy a ProtoStrap release: protostrap deploy <commit>, on data-1, with the release's version of protostrap."
     parameters = {
       commit = {
         type           = "String"
@@ -75,7 +75,10 @@ resource "aws_ssm_document" "deploy" {
       name   = "deploy"
       inputs = {
         timeoutSeconds = "5400"
-        runCommand     = ["/usr/local/bin/protostrap deploy --config /etc/protostrap/scheduler.json {{ commit }}"]
+        runCommand = [templatefile("${path.module}/templates/protostrap-deploy.sh.tftpl", {
+          region        = local.region
+          deploy_bucket = data.aws_s3_bucket.deploy.bucket
+        })]
       }
     }]
   })

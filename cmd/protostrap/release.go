@@ -93,8 +93,7 @@ func runRelease(args []string, out io.Writer) int {
 		fmt.Fprintln(out, err)
 		return 1
 	}
-	b, _ := json.MarshalIndent(r, "", "  ")
-	b = append(b, '\n')
+	b := releaseJSON(r)
 	if *dest == "" {
 		out.Write(b)
 		return 0
@@ -105,4 +104,12 @@ func runRelease(args []string, out io.Writer) int {
 	}
 	fmt.Fprintf(out, "release %s written to %s\n", r.Commit, *dest)
 	return 0
+}
+
+// releaseJSON is a release as `protostrap release` writes it. The protostrap-deploy document
+// reads the version from its top-level "protostrap" line, indented by two spaces
+// (infra/platform/templates/protostrap-deploy.sh.tftpl).
+func releaseJSON(r release.Release) []byte {
+	b, _ := json.MarshalIndent(r, "", "  ")
+	return append(b, '\n')
 }

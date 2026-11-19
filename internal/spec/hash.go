@@ -76,6 +76,9 @@ func (c *Component) Fingerprint(image, config string) string {
 // InfraProjection is the part of the spec Terraform reads. The infra workflow only needs to
 // run when it changes (docs/protostrap-aspire.md, "Infrastructure projection").
 type InfraProjection struct {
+	// ProtoStrap is the version, whose platform module the roots pin, so a new version's
+	// Terraform is applied before its first release.
+	ProtoStrap string `json:"protostrap"`
 	// Tunnel and Gateway say whether Terraform makes the tunnel, and the gateway's
 	// repository, role and hosts. Terraform makes all of the CDN.
 	CDN        *CDN                      `json:"cdn,omitempty"`
@@ -118,6 +121,7 @@ type compProjection struct {
 // Projection returns the infra projection.
 func (s *Spec) Projection() InfraProjection {
 	p := InfraProjection{
+		ProtoStrap: s.ProtoStrap,
 		CDN:        s.CDN,
 		Tunnel:     s.Tunnel != nil,
 		Gateway:    s.Gateway != nil,

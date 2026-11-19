@@ -787,7 +787,8 @@ Terraform config.
 
 ### Infrastructure projection
 
-Terraform reads only part of the spec: the whole `cdn`; whether it has the tunnel, the
+Terraform reads only part of the spec: its `protostrap` version, at which the roots pin the
+platform module; the whole `cdn`; whether it has the tunnel, the
 gateway and telemetry; the gateway's `hosts`; each pool's VM types, minimum, maximum and
 count; `queues`; `buckets`; per component, its name and kind, its `uses` and `queue`
 signals, and a stateful component's `vm` and volume `size`; and, only when the spec has
@@ -795,7 +796,9 @@ telemetry, its `volume` and how long it keeps logs and traces. From these it mak
 component's ECR repository, secret, log group, [role](identity.md#component-roles) and EBS
 volume, the tunnel and its DNS records, the CDN's rules, and telemetry's volume.
 `protostrap plan` hashes that part. After a successful apply, the infra workflow writes the
-hash it applied to the deploy bucket, as `infra/<environment>.sha256`.
+hash it applied to the deploy bucket, as `infra/<environment>.sha256`. A new ProtoStrap
+version changes the hash, so its Terraform, such as the deploy command data-1 runs, is
+applied before its first release; when the module hasn't changed, the plan is empty.
 
 The deploy workflow runs the infra workflow only when the two differ, and before it builds,
 because a new component's ECR repository must exist before its image is pushed. A change to a
