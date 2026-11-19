@@ -3,16 +3,18 @@
 # session. There are no IAM users and no access keys. Each group has one permission set per
 # account, with its policies, session length and accounts:
 #
-#   Org-Admins       OrgAdmin       AdministratorAccess                          4 hours   every account
-#   Platform-Admins  PlatformAdmin  read-only view, operator UI, Grafana         12 hours  every account
-#   Developers       Developer      read-only view, dev's secret, Grafana        12 hours  every account
+#   Org-Admins       OrgAdmin       AdministratorAccess                               4 hours   every account
+#   Platform-Admins  PlatformAdmin  read-only view, operator UI, Grafana              12 hours  every account
+#   Developers       Developer      read-only view, dev's secret and bucket, Grafana  12 hours  every account
 #
 # Org Admins set the platform's secret values, change boundaries (by applying bootstrap)
 # and handle anything else. Platform Admins watch the platform: they see every account and
 # open the operator UI and Grafana, and change nothing. Developers run services locally,
 # which read dev's secret, <app>/dev, with the developer's sign-in: dev is that local run,
-# nothing is deployed for it, and its secret sits in the account beside prod's. Their code
-# reaches the platform only through GitHub Actions.
+# nothing is deployed for it, and its secret sits in the account beside prod's. Dev's bucket,
+# <app>-<account>-<region>-dev, holds what developers share that LocalStack would lose; like
+# the secret, a developer makes it once. Their code reaches the platform only through GitHub
+# Actions.
 #
 # The operator UI (docs/protostrap.md#operator-ui) and Grafana (docs/telemetry.md) are each
 # reached with an SSM port forward to data-1, and the session document a person may start is
@@ -40,7 +42,7 @@ terraform {
 }
 
 variable "accounts" {
-  description = "The AWS accounts ProtoStrap runs in, by deployed environment, such as { prod = \"222222222222\" }. Dev, the local run, has none: its secret is in prod's."
+  description = "The AWS accounts ProtoStrap runs in, by deployed environment, such as { prod = \"222222222222\" }. Dev, the local run, has none: its secret and bucket are in prod's."
   type        = map(string)
 }
 
@@ -165,7 +167,7 @@ resource "aws_ssoadmin_permission_set_inline_policy" "platform_admin" {
 
 resource "aws_ssoadmin_permission_set" "developer" {
   name             = "Developer"
-  description      = "Read-only view, dev's secret, which services read when run locally, and Grafana through an SSM port forward to data-1."
+  description      = "Read-only view, dev's secret, which services read when run locally, dev's bucket, and Grafana through an SSM port forward to data-1."
   instance_arn     = local.instance
   session_duration = "PT12H"
 }
@@ -210,6 +212,29 @@ resource "aws_ssoadmin_permission_set_inline_policy" "developer" {
         Action    = ["secretsmanager:GetSecretValue", "secretsmanager:PutSecretValue"]
         Resource  = "*"
         Condition = { Null = { "aws:ResourceTag/protostrap:app" = "false" } }
+      },
+      {
+        # Dev's bucket, <app>-<account>-<region>-dev: developers make it, read it and add to
+        # it. Nothing is deleted but by an Org Admin.
+        Sid    = "DevelopmentBucket"
+        Effect = "Allow"
+        Action = [
+          "s3:CreateBucket",
+          "s3:ListBucket",
+          "s3:GetBucketLocation",
+          "s3:GetObject",
+          "s3:PutObject",
+          "s3:AbortMultipartUpload",
+        ]
+        Resource = ["arn:aws:s3:::*-dev", "arn:aws:s3:::*-dev/*"]
+      },
+      {
+        # The platform's buckets are protostrap-<account>-<region>-<name>, and a spec's bucket
+        # may be named dev.
+        Sid      = "NotThePlatformsBuckets"
+        Effect   = "Deny"
+        Action   = ["s3:CreateBucket", "s3:GetObject", "s3:PutObject", "s3:AbortMultipartUpload"]
+        Resource = ["arn:aws:s3:::protostrap-*", "arn:aws:s3:::protostrap-*/*"]
       },
       # These open Grafana, the services' logs, traces and metrics, through the
       # protostrap-telemetry session document only: not the operator UI's, whose infra log is

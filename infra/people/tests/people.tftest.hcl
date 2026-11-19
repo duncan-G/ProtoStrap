@@ -138,8 +138,8 @@ run "developers_open_grafana_and_not_the_operator_ui" {
 
   assert {
     condition = (sort([for s in jsondecode(aws_ssoadmin_permission_set_inline_policy.developer.inline_policy).Statement : s.Sid]) ==
-    tolist(["DevelopmentSecrets", "EndOwnSessions", "FindDataOne", "GrafanaDocument", "GrafanaOnDataOne", "NotTheEnvironmentsSecret", "NotThePlatformsSecrets"]))
-    error_message = "Developer manages dev's secret, can't read the platform's, and opens Grafana."
+    tolist(["DevelopmentBucket", "DevelopmentSecrets", "EndOwnSessions", "FindDataOne", "GrafanaDocument", "GrafanaOnDataOne", "NotTheEnvironmentsSecret", "NotThePlatformsBuckets", "NotThePlatformsSecrets"]))
+    error_message = "Developer manages dev's secret and bucket, can't read the platform's, and opens Grafana."
   }
 }
 
@@ -157,5 +157,31 @@ run "developers_manage_devs_secret" {
     condition = (length([for s in jsondecode(aws_ssoadmin_permission_set_inline_policy.developer.inline_policy).Statement : s if s.Sid == "NotTheEnvironmentsSecret" && s.Effect == "Deny" && s.Condition.Null["aws:ResourceTag/protostrap:app"] == "false"]) == 1 &&
     !contains(flatten([for s in jsondecode(aws_ssoadmin_permission_set_inline_policy.developer.inline_policy).Statement : s.Action if s.Effect == "Allow"]), "secretsmanager:UntagResource"))
     error_message = "Prod's secret carries the platform's tag, which denies it to Developers, and they can't remove the tag."
+  }
+}
+
+# Dev's bucket, <app>-<account>-<region>-dev, holds what developers share that LocalStack
+# loses. They make it, read it and add to it; only an Org Admin deletes.
+run "developers_add_to_devs_bucket" {
+  command = apply
+
+  assert {
+    condition     = [for s in jsondecode(aws_ssoadmin_permission_set_inline_policy.developer.inline_policy).Statement : s.Resource if s.Sid == "DevelopmentBucket"] == [["arn:aws:s3:::*-dev", "arn:aws:s3:::*-dev/*"]]
+    error_message = "Developer's bucket is dev's, named <app>-<account>-<region>-dev."
+  }
+
+  assert {
+    condition = alltrue([for a in flatten([for s in jsondecode(aws_ssoadmin_permission_set_inline_policy.developer.inline_policy).Statement : s.Action if s.Effect == "Allow"]) :
+    !startswith(a, "s3:Delete") && !contains(["s3:*", "s3:PutBucketPolicy", "s3:PutBucketAcl", "s3:PutObjectAcl"], a)])
+    error_message = "Developers delete nothing in dev's bucket and can't open it up."
+  }
+
+  assert {
+    condition = (setsubtract(
+      [for s in jsondecode(aws_ssoadmin_permission_set_inline_policy.developer.inline_policy).Statement : s.Action if s.Sid == "DevelopmentBucket"][0],
+      [for s in jsondecode(aws_ssoadmin_permission_set_inline_policy.developer.inline_policy).Statement : s.Action if s.Sid == "NotThePlatformsBuckets" && s.Effect == "Deny"][0]
+      ) == toset(["s3:GetBucketLocation", "s3:ListBucket"]) &&
+    [for s in jsondecode(aws_ssoadmin_permission_set_inline_policy.developer.inline_policy).Statement : s.Resource if s.Sid == "NotThePlatformsBuckets"] == [["arn:aws:s3:::protostrap-*", "arn:aws:s3:::protostrap-*/*"]])
+    error_message = "A platform bucket that matches *-dev, such as a spec's bucket named dev, stays the platform's: Developers only list it, as before."
   }
 }

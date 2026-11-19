@@ -74,11 +74,11 @@ is stored in GitHub (see
 People sign in through IAM Identity Center, with MFA, for credentials that last the
 session.
 
-| Group              | Can                                                                 | Session  |
-| ------------------ | ------------------------------------------------------------------- | -------- |
-| **Org Admin**      | Everything (AdministratorAccess)                                    | 4 hours  |
-| **Platform Admin** | View every account read-only, and open the operator UI and Grafana  | 12 hours |
-| **Developer**      | View every account read-only, manage dev's secret, and open Grafana | 12 hours |
+| Group              | Can                                                                            | Session  |
+| ------------------ | ------------------------------------------------------------------------------ | -------- |
+| **Org Admin**      | Everything (AdministratorAccess)                                               | 4 hours  |
+| **Platform Admin** | View every account read-only, and open the operator UI and Grafana             | 12 hours |
+| **Developer**      | View every account read-only, manage dev's secret and bucket, and open Grafana | 12 hours |
 
 - **Org Admins** set the platform's secret values, change boundaries and handle anything
   else, in every account.
@@ -91,7 +91,10 @@ session.
   it: it has no account, and its secret sits in the application's account beside prod's,
   `<app>/prod`. In every account Developers view the account read-only (ViewOnlyAccess),
   manage dev's secret, and open Grafana, to read their services' logs, traces and metrics
-  in prod. They can't read prod's secret, which the platform tags, or open the operator UI.
+  in prod. They make dev's bucket, `<app>-<account>-<region>-dev`, once, and read and add
+  to it, but delete nothing in it ([Dev's bucket](protostrap-aspire.md#queues-and-buckets)).
+  They can't read prod's secret, which the platform tags, read or write the platform's
+  buckets, or open the operator UI.
 - **The operator UI** and its logs API are reached through an SSM port forward to data-1
   (see [Operator UI](protostrap.md#operator-ui)), and only Org Admins and Platform Admins
   may open it. The session document a person may start is their role there. Platform
