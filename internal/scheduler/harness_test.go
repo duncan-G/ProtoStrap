@@ -164,6 +164,7 @@ type harness struct {
 	configHookFails map[string]bool            // A follower can't take new config files, keyed by component@digest.
 	failingImages   map[string]bool            // A task run in this image exits 1, keyed by component:tag.
 	taskSteps       map[string]int             // It is how many syncs a task takes to finish, 2 by default.
+	stopSteps       map[string]int             // It is how many syncs a replica takes to stop, 1 by default.
 	taskRuns        map[string][]taskRunRecord // They are each task's runs, in the order they started.
 }
 
@@ -754,7 +755,8 @@ type simReplica struct {
 	spec    api.ReplicaSpec
 	state   string
 	age     int
-	gone    bool   // The replica is reported stopping once, then removed.
+	gone    bool   // The replica is reported stopping until it has stopped, then removed.
+	stopped int    // It counts the syncs the replica has been stopping for.
 	applied string // It is the version of its keys a follower has applied.
 	failure *api.SecretFailure
 
@@ -799,7 +801,8 @@ func (a *simAgent) sync() {
 		c := r.spec.Component
 		switch {
 		case r.state == api.StateStopping:
-			r.gone = true
+			r.stopped++
+			r.gone = r.stopped >= h.stopStepsOf(c)
 		case r.spec.Kind == api.KindTask && r.state == api.StateStarting && r.age >= h.taskStepsOf(c):
 			if h.taskFails[c] || h.failingImages[c+":"+r.spec.Image[strings.LastIndex(r.spec.Image, ":")+1:]] {
 				r.state = api.StateFailed
@@ -946,6 +949,13 @@ func (h *harness) taskStepsOf(c string) int {
 		return n
 	}
 	return 2
+}
+
+func (h *harness) stopStepsOf(c string) int {
+	if n, ok := h.stopSteps[c]; ok {
+		return n
+	}
+	return 1
 }
 
 func (h *harness) readyAfterOf(c string) int {

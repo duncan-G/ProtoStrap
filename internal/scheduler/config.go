@@ -290,13 +290,22 @@ func (s *Scheduler) taskRunning(task string) bool {
 	return false
 }
 
-// settled says why a component isn't ready to be configured, or "": it has rolled out, its
-// replicas have its keys and config files, and one is ready.
+// settled says why a component isn't ready to be configured, or "": it has rolled out, the
+// replicas it replaced have stopped, its replicas have its keys and config files, and one is
+// ready.
 func (s *Scheduler) settled(tgt *target, c *spec.Component) string {
 	rc := tgt.rel.Components[c.Name]
 	ready := 0
 	for _, r := range s.st.replicas {
-		if r.Component != c.Name || r.Kind == api.KindTask || !r.live() {
+		if r.Component != c.Name || r.Kind == api.KindTask {
+			continue
+		}
+		// A replica that is stopping still answers to the component's name until it has
+		// stopped, and drops the task's connections when it does.
+		if r.Stop || r.State == api.StateStopping {
+			return c.Name + " is still stopping a replica"
+		}
+		if !r.live() {
 			continue
 		}
 		switch {
