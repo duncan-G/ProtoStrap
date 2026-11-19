@@ -117,10 +117,11 @@ aspire do protostrap-spec
 
 writes `protostrap.yaml` at the root of the git repository the AppHost is in, or where
 `WithSpecPath(...)` says; paths in it are relative to its directory. `aspire publish` runs the
-same step. Without the Aspire CLI, run the AppHost in publish mode:
+same step. Without the Aspire CLI installed, run the AppHost's version of it through `dnx`, as
+the plan workflow does; Aspire 17's `dotnet run` can't start an AppHost in publish mode:
 
 ```bash
-dotnet run --project apphost -- --operation publish --step protostrap-spec
+dotnet dnx --yes aspire.cli@17.0.0 -- do protostrap-spec
 ```
 
 The spec is written only if it changed. Then, if `protostrap` is on the `PATH`, the step runs

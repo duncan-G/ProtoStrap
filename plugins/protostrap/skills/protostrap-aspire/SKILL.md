@@ -22,7 +22,8 @@ protostrap-contract.
    aspire do protostrap-spec
    ```
 
-   Without the Aspire CLI: `dotnet run --project <apphost.csproj> -- --operation publish --step protostrap-spec`.
+   Without the Aspire CLI installed: `dotnet dnx --yes aspire.cli@<Aspire version> -- do protostrap-spec`.
+   Aspire 17's `dotnet run` can't start an AppHost in publish mode.
    With `protostrap` on `PATH`, the step also runs `protostrap check`.
 3. **Read the diff** of `protostrap.yaml`, and say in the pull request what it does: new
    `uses` are new permissions, new `sources` new rebuild triggers, new queues and buckets an
