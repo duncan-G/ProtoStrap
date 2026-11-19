@@ -1,0 +1,37 @@
+# protostrap-deploy runs `protostrap deploy <commit>` on data-1 with the binary of the
+# release's own ProtoStrap version, installing it first: a binary older than the release
+# can't read a spec that uses a newer field, so it would fail before it could update itself.
+set -eu
+export AWS_DEFAULT_REGION='${region}'
+bucket='${deploy_bucket}'
+commit='{{ commit }}'
+
+dir=$(mktemp -d)
+trap 'rm -rf "$dir"' EXIT
+aws s3 cp --only-show-errors "s3://$bucket/releases/$commit.json" "$dir/release.json"
+# `protostrap release` indents the release by two spaces, so its version is the one
+# top-level "protostrap" line.
+version=$(sed -n 's/^  "protostrap": "\([^"]*\)",$/\1/p' "$dir/release.json")
+if ! printf '%s\n' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.+-]+)?$'; then
+  echo "protostrap-deploy: releases/$commit.json names no ProtoStrap version" >&2
+  exit 1
+fi
+
+if [ "$(/usr/local/bin/protostrap version 2>/dev/null || true)" != "$version" ]; then
+  # Every VM is Graviton, which runs the arm64 build.
+  key="protostrap/$version/protostrap-linux-arm64"
+  aws s3 cp --only-show-errors "s3://$bucket/$key" "$dir/protostrap"
+  want=$(aws s3 cp --only-show-errors "s3://$bucket/$key.sha256" - | awk '{print $1}')
+  got=$(sha256sum "$dir/protostrap" | awk '{print $1}')
+  if [ "$want" != "$got" ]; then
+    echo "protostrap-deploy: $key has SHA-256 $got, but $key.sha256 says $want" >&2
+    exit 1
+  fi
+  chmod 0755 "$dir/protostrap"
+  # A copy beside the binary, then a rename, so the agent and scheduler never see half a file.
+  cp "$dir/protostrap" /usr/local/bin/.protostrap.deploy
+  mv -f /usr/local/bin/.protostrap.deploy /usr/local/bin/protostrap
+  echo "protostrap-deploy: installed protostrap $version"
+fi
+
+/usr/local/bin/protostrap deploy --config /etc/protostrap/scheduler.json "$commit"

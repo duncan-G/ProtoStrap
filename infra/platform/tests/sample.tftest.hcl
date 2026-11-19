@@ -223,6 +223,13 @@ run "sample" {
   }
 
   assert {
+    condition = (strcontains(jsondecode(aws_ssm_document.deploy.content).mainSteps[0].inputs.runCommand[0], "bucket='protostrap-123456789012-us-east-1-deploy'") &&
+      strcontains(jsondecode(aws_ssm_document.deploy.content).mainSteps[0].inputs.runCommand[0], "key=\"protostrap/$version/protostrap-linux-arm64\"") &&
+    endswith(trimspace(jsondecode(aws_ssm_document.deploy.content).mainSteps[0].inputs.runCommand[0]), "/usr/local/bin/protostrap deploy --config /etc/protostrap/scheduler.json \"$commit\""))
+    error_message = "protostrap-deploy installs the release's version of protostrap from the deploy bucket, then deploys with it."
+  }
+
+  assert {
     condition     = toset(local.tunnel_hosts) == toset(["sample.example.com"]) && toset(keys(cloudflare_dns_record.host)) == toset(["sample.example.com"])
     error_message = "Every host points at the tunnel."
   }

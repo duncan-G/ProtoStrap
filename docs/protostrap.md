@@ -579,7 +579,10 @@ places and the new isn't read at all.
      pull from Docker Hub.
   4. Write the release, `releases/<commit>.json` in the deploy bucket: the spec and every
      component's image tag.
-  5. Send `protostrap-deploy <commit>` to data-1 through SSM, and wait for its result.
+  5. Send `protostrap-deploy <commit>` to data-1 through SSM, and wait for its result. The
+     command installs the release's version of `protostrap` on data-1 first, if it isn't
+     there yet: an older binary can't read a spec that uses a newer field, so it couldn't
+     update itself.
 - **A release is the whole application at one commit.** Unchanged components keep their
   tag, so their replicas aren't touched. Rolling back is deploying an earlier commit's
   release again: its images still exist.
