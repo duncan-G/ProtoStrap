@@ -603,7 +603,7 @@ components:
 
   postgres:
     kind: stateful
-    image: postgres:18.3
+    image: postgres:18.6
     vm: data-1
     request: { cpu: 2000m, memory: 8Gi }
     port: 5432
@@ -658,9 +658,8 @@ public static IResourceBuilder<ProtoStrapEnvironmentResource> AddProtoStrapEnvir
 
 The step doesn't depend on Aspire's `process-parameters` step. It writes parameter names,
 never values, so generating the spec needs no secrets and runs unattended in CI. When it
-fails, it lists every problem and writes nothing, and the AppHost exits with 1, so
-`dotnet run --project apphost -- --operation publish --step protostrap-spec` fails as `aspire
-do protostrap-spec` does.
+fails, it lists every problem and writes nothing, and the AppHost exits with 1, so `aspire do
+protostrap-spec` fails, in CI as on a laptop.
 
 
 ## Only deploying what changed

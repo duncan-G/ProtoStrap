@@ -22,7 +22,8 @@ protostrap-contract.
    aspire do protostrap-spec
    ```
 
-   Without the Aspire CLI: `dotnet run --project <apphost.csproj> -- --operation publish --step protostrap-spec`.
+   Without the Aspire CLI installed: `dotnet dnx --yes aspire.cli@<Aspire version> -- do protostrap-spec`.
+   Aspire 17's `dotnet run` can't start an AppHost in publish mode.
    With `protostrap` on `PATH`, the step also runs `protostrap check`.
 3. **Read the diff** of `protostrap.yaml`, and say in the pull request what it does: new
    `uses` are new permissions, new `sources` new rebuild triggers, new queues and buckets an
@@ -40,7 +41,7 @@ changed on disk: fix the AppHost and regenerate before committing.
 
 ```csharp
 var protostrap = builder.AddProtoStrapEnvironment("protostrap", app: "shop")
-    .WithVersion("0.1.15")                   // = the workflows' @v0.1.15 and the roots' ?ref=v0.1.15
+    .WithVersion("0.1.16")                   // = the workflows' @v0.1.16 and the roots' ?ref=v0.1.16
     .WithIngressPool(vm: "c8g.medium")
     .WithGeneralPool(vm: ["m7g.large", "m6g.large", "m8g.large", "m7gd.large"], min: 1, max: 4)
     .WithComputePool(vm: ["c7g.large", "c6g.large", "c8g.large", "c7gd.large"], min: 0, max: 2)
@@ -305,4 +306,6 @@ image then changes the build without a commit. Pin it before production.
 Until the package is on NuGet, the AppHost references its project from a ProtoStrap checkout
 at the same version, through an MSBuild property (`.protostrap/`, where CI checks it out, or
 `../ProtoStrap`), with `IsAspireProjectResource="false"`. The package pins an Aspire version
-(13.6.5 for 0.1.15) and targets net11.0: use the same `Aspire.AppHost.Sdk` and a net11.0 AppHost.
+(17.0.0 for 0.1.16) and targets net11.0: use the same `Aspire.AppHost.Sdk` and a net11.0 AppHost.
+Register .NET components with `AddProject`, which Aspire 17 marks obsolete (CS0618): the spec
+generator doesn't read `AddDotnetProject`'s `DotnetProjectResource` yet.

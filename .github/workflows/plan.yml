@@ -101,7 +101,7 @@ jobs:
           APPHOST: ${{ inputs.apphost }}
         run: |
           set -euo pipefail
-          # The AppHost is a project file or its directory, as dotnet run --project takes.
+          # The AppHost is a project file or its directory, as aspire do --apphost takes.
           dir=$APPHOST
           [ -d "$dir" ] || dir=$(dirname "$APPHOST")
           echo "dir=$dir" >> "$GITHUB_OUTPUT"
@@ -129,9 +129,15 @@ jobs:
         run: |
           set -euo pipefail
           # The SDK reads global.json from the directory it runs in, not the project's, and
-          # the runner has SDKs of its own, so the AppHost runs in its own directory.
+          # the runner has SDKs of its own, so the AppHost runs in its own directory. Aspire 17's
+          # dotnet run can't start an AppHost in publish mode, so the step runs through the
+          # Aspire CLI of the AppHost's own Aspire version.
           project=$(realpath "$APPHOST")
-          (cd "$APPHOST_DIR" && dotnet run --project "$project" -- --operation publish --step protostrap-spec)
+          (
+            cd "$APPHOST_DIR"
+            aspire=$(dotnet msbuild "$project" -getProperty:AspireHostingSDKVersion)
+            dotnet dnx --yes "aspire.cli@$aspire" -- do protostrap-spec --apphost "$project" --non-interactive --nologo
+          )
           if [ -n "$(git status --porcelain -- "$SPEC")" ]; then
             git diff -- "$SPEC" || true
             echo "::error file=$SPEC::$SPEC isn't what $APPHOST writes: run aspire do protostrap-spec and commit it"

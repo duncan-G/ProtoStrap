@@ -8,7 +8,7 @@ AppHost and the MSBuild project graph instead of written by hand. The design is 
 
 | Path                                                                   | What it is                                                |
 | ---------------------------------------------------------------------- | --------------------------------------------------------- |
-| [`src/ProtoStrap.Hosting`](src/ProtoStrap.Hosting)                     | The package, for Aspire 13.6 and .NET 10                  |
+| [`src/ProtoStrap.Hosting`](src/ProtoStrap.Hosting)                     | The package, for Aspire 17.0 and .NET 11                  |
 | [`tests/ProtoStrap.Hosting.Tests`](tests/ProtoStrap.Hosting.Tests)     | Its tests, scenario by scenario                           |
 | [`tests/.../Golden/protofast.yaml`](tests/ProtoStrap.Hosting.Tests/Golden/protofast.yaml) | The spec the AppHost in the design generates, which `internal/spec`'s Go tests also check |
 
@@ -117,10 +117,11 @@ aspire do protostrap-spec
 
 writes `protostrap.yaml` at the root of the git repository the AppHost is in, or where
 `WithSpecPath(...)` says; paths in it are relative to its directory. `aspire publish` runs the
-same step. Without the Aspire CLI, run the AppHost in publish mode:
+same step. Without the Aspire CLI installed, run the AppHost's version of it through `dnx`, as
+the plan workflow does; Aspire 17's `dotnet run` can't start an AppHost in publish mode:
 
 ```bash
-dotnet run --project apphost -- --operation publish --step protostrap-spec
+dotnet dnx --yes aspire.cli@17.0.0 -- do protostrap-spec
 ```
 
 The spec is written only if it changed. Then, if `protostrap` is on the `PATH`, the step runs
@@ -213,12 +214,14 @@ dotnet test hosting/ProtoStrap.Hosting.slnx
 ```
 
 The tests build AppHosts in publish mode over repositories they write to a temporary
-directory, and trace real projects with `dotnet msbuild`, so they need the .NET 10 SDK but no
+directory, and trace real projects with `dotnet msbuild`, so they need the .NET 11 SDK but no
 network once packages are restored. `ProtoFastScenarioTests` generates the spec of the AppHost
 in the design and compares it with `Golden/protofast.yaml`; after a deliberate change to the
 format, rewrite it with `PROTOSTRAP_UPDATE_GOLDEN=1 dotnet test hosting/ProtoStrap.Hosting.slnx`
 and run the Go tests, which check the same file.
 
-Aspire's pipeline and compute environment APIs are experimental in 13.x and change between
-minor versions, so the package pins Aspire 13.6.2. The spec's format, not the Aspire API, is
-the contract.
+The package pins the Aspire version it is tested against, 17.0.0. The spec's format, not the
+Aspire API, is the contract. Aspire 17 marks `AddProject` obsolete in favour of
+`AddDotnetProject`, but the spec generator reads only `AddProject`'s `ProjectResource`, so an
+AppHost keeps `AddProject` for its .NET components and suppresses CS0618 where warnings are
+errors.
