@@ -215,7 +215,7 @@ hand.
 | Setting                                          | Value                                                                            |
 | ------------------------------------------------ | -------------------------------------------------------------------------------- |
 | `prod-approval`: required reviewers              | Whoever may release to prod                                                      |
-| `prod-infra`: required reviewers                 | Whoever may change prod's infrastructure. Applies only when the infra projection changed |
+| `prod-infra`: required reviewers                 | Whoever may change prod's infrastructure. Applies only when the infra projection changed, which a new ProtoStrap version does |
 | `prod`, `prod-infra`: deployment branches        | `main` only. The roles trust these environments, so this decides what code can take them on |
 | `main`: branch ruleset                           | Pull requests with review, and `ci` passing                                      |
 | `CODEOWNERS`                                     | `protostrap.yaml` and `infra/` owned by whoever approves infrastructure          |
@@ -425,8 +425,10 @@ change to bootstrap ([Adding to ProtoStrap](identity.md#adding-to-protostrap)).
 Prove the new version with the sample in its test account
 ([Prove it with the sample](#2-prove-it-with-the-sample)) and tag it, then in one pull
 request change the spec's `protostrap:`, every workflow's `@v…` and `protostrap-ref`, and
-every module's `?ref=`. The release updates the scheduler first, then every agent. Like any
-release, it waits for approval before prod.
+every module's `?ref=`. The new version changes the infra projection, so the deploy runs
+the infra workflow first, which waits for approval on `prod-infra` and applies the platform
+module's changes, if it has any. The release then updates the scheduler, then every agent.
+Like any release, it waits for approval before prod.
 
 ### Rotating a secret
 

@@ -817,7 +817,7 @@ func TestInfraHash(t *testing.T) {
 		{"routes", replace("routes: [shop/api/]", "routes: [shop/v2/]"), false},
 		{"gateway request", replace("  request: { cpu: 500m, memory: 256Mi }\n  hosts:", "  request: { cpu: 600m, memory: 256Mi }\n  hosts:"), false},
 		{"telemetry request", replace("telemetry: {}", "telemetry: { request: { cpu: 400m, memory: 1Gi } }"), false},
-		{"version", replace("protostrap: 1.4.0", "protostrap: 1.5.0"), false},
+		{"version", replace("protostrap: 1.4.0", "protostrap: 1.5.0"), true},
 		{"uses", replace("uses: [orders]", "uses: [orders, files]"), true},
 		{"pool max", replace("    max: 10\n    spare", "    max: 11\n    spare"), true},
 		{"pool vm types", replace("[m7g.xlarge, m6g.xlarge, m8g.xlarge, m7gd.xlarge]", "[m7g.xlarge, m6g.xlarge]"), true},
